@@ -26,3 +26,5 @@ tau_epsilon ~ Gamma(1, 1)
 
 
 Where `y` is inflation, `x` are country-specific regressors, and `w` is a global regressor.
+
+
