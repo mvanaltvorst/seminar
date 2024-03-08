@@ -78,6 +78,7 @@ def read_inflation(
         df_hcpi_pct_change["hcpi"] = df_hcpi_pct_change.groupby("Country")[
             "hcpi"
         ].pct_change()
+        df_hcpi_pct_change = df_hcpi_pct_change.rename(columns={"hcpi": "inflation"})
         # drop na's
         df_hcpi_pct_change = df_hcpi_pct_change.dropna()
         return df_hcpi_pct_change

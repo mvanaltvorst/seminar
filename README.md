@@ -1,12 +1,12 @@
 # Seminar
 ## Potential models
-### ARMA model
-Should fit an ARMA model on each individual country, and use AIC to select the best model per country (could differ per country).
+### ARMAX model
+Should fit an ARMAX model on each individual country, and use AIC to select the best model per country (could differ per country).
 
-### PCA dimension reduced VAR model
-Project the time-varying regressors onto a lower-dimensional space using PCA, and then fit a VAR model on the projected data.
+### PCA dimension reduced VARX model
+Project the time-varying regressors onto a lower-dimensional space using PCA, and then fit a VARX model on the projected data.
 
-Maybe other dimension reduction techniques could be used?
+Maybe other dimension reduction techniques could be used? 
 
 ### Random effects model
 
