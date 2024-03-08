@@ -34,3 +34,4 @@ beta[i] - beta[j] ~ N(0, dist(i, j) * sigma_beta)
 # incorporate prior that betas are similar for closeby countries
 # only for countries i and j that are main trade partners
 ```
+distance based on 1. trades 2. geographical similarity within continent
