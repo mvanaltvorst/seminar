@@ -1,6 +1,6 @@
 # Seminar
 ## Potential models
-### Fixed effects model
+### Random effects model
 
 ```
 y[i, t] = alpha[i] + beta[i] * x[i, t] + gamma[i] * w[t] + epsilon[i, t]
@@ -26,3 +26,5 @@ tau_epsilon ~ Gamma(1, 1)
 
 
 Where `y` is inflation, `x` are country-specific regressors, and `w` is a global regressor.
+
+
