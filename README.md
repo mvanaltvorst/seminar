@@ -57,3 +57,9 @@ Important:
 - joint distribution of `alpha[i]` and `beta[i]`
 - actual inflation forecasts and 95% confidence intervals (and what fraction falls within)
 
+
+## Useful links
+- https://florianwilhelm.info/2020/10/bayesian_hierarchical_modelling_at_scale/
+- https://www.pymc.io/welcome.html
+PyMC might be slow, in that case we can try PyJAGS
+- https://github.com/michaelnowotny/pyjags
