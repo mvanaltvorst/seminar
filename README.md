@@ -35,3 +35,25 @@ beta[i] - beta[j] ~ N(0, dist(i, j) * sigma_beta)
 # only for countries i and j that are main trade partners
 ```
 distance based on 1. trades 2. geographical similarity within continent
+
+## Techniques to incorporate
+### Check convergence of MCMC
+- autocorrelation 
+- trace plot
+- Gelman-Rubin statistic
+- effective sample size
+
+Important:
+- use sufficient burn-in
+
+### Obtain acceptance rate of around 40% for MCMC
+
+### Brier score to evaluate forecast accuracy
+
+### DIC comparison of models
+
+## Plots to make
+- `alpha[i]` on world map
+- joint distribution of `alpha[i]` and `beta[i]`
+- actual inflation forecasts and 95% confidence intervals (and what fraction falls within)
+
