@@ -3,7 +3,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 import pandas as pd
 
 
-class ARMAXModel(BaseModel):
+class SARIMAXModel(BaseModel):
     """
     An ARMAX model for forecasting inflation rates.
     Independent ARMAX per country.
@@ -40,6 +40,9 @@ class ARMAXModel(BaseModel):
         for country in countries:
             country_data = data[data[self.country_column] == country]
             country_data = country_data.set_index("yearmonth")
+            country_data.index = pd.DatetimeIndex(country_data.index).to_period(
+                "Q"
+            )  # For quarterly data
             model, order = self._fit_model(country_data)
             self.models[country] = model
             self.orders[country] = order
@@ -69,7 +72,7 @@ class ARMAXModel(BaseModel):
                 # quiet
                 model = SARIMAX(
                     data[self.inflation_column],
-                    order=(p, 0, q),
+                    seasonal_order=(p, 0, q, 4),
                     exog=data[self.exogenous_columns]
                     if self.exogenous_columns
                     else None,
@@ -78,12 +81,12 @@ class ARMAXModel(BaseModel):
                 if self.criterion == "aic":
                     if results.aic < best_ic:
                         best_ic = results.aic
-                        best_order = (p, d, q)
+                        best_order = (p, q)
                         best_model = model
                 elif self.criterion == "bic":
                     if results.bic < best_ic:
                         best_ic = results.bic
-                        best_order = (p, d, q)
+                        best_order = (p, q)
                         best_model = model
 
                 # except Exception as e:
