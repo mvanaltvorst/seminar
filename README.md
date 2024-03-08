@@ -25,6 +25,12 @@ tau_epsilon ~ Gamma(1, 1)
 ```
 
 
-Where `y` is inflation, `x` are country-specific regressors, and `w` is a global regressor.
+Where `y` is inflation, `x` are country-specific time-varying regressors, and `w` is a global time-varying regressor.
 
 
+### Distance-based model
+```
+y[i,t] = alpha[i] + beta[i] * x[i, t] + gamma[i] * w[t] + epsilon[i, t]
+... (same as above)
+beta[i] - beta[j] ~ N(0, dist(i, j) * sigma_beta) # incorporate prior that betas are similar for closeby countries
+```
