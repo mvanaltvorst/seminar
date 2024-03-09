@@ -1,4 +1,6 @@
 # Interesting Literature
+These papers could give some insight into what inflation indicators to select, how to select hyperparameters, how to compare models etc 
+
 
 ## Bayesian (VAR) models to forecast inflation
 ### `BVAR Irish inflaltion.pdf`
