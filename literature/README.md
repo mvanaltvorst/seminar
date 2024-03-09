@@ -1,5 +1,6 @@
 # Interesting Literature
 These papers could give some insight into what inflation indicators to select, how to select hyperparameters, how to compare models etc 
+None seem to focus on density forecasts using Bayesian hierarchial models.
 
 
 ## Bayesian (VAR) models to forecast inflation
