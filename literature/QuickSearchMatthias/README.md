@@ -22,3 +22,4 @@ Bayesian hierarchial models used to predict football scores
 ### `bayesaian hierarchial corn yield.pdf`
 Bayesian hierarchial models used to yield of corn
 
+
