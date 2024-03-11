@@ -1,4 +1,4 @@
-from .base_model import BaseModel
+from seminartools.models.base_model import BaseModel
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 import pandas as pd
 
