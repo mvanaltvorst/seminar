@@ -1,6 +1,7 @@
 # Datasets
 ### `inflation-data.xlsx`
-Source: https://www.worldbank.org/en/research/brief/inflation-database
+Source: https://www.worldbank.org/en/research/brief/inflation-database 
+consumer price index (CPI) inflation
 
 ### Commodity prices `CMO-*.xlsx`
 The data including commodities prices comes from the World Bank. https://www.worldbank.org/en/research/brief/inflation-database. Simply go to the subsection "Data Download".
