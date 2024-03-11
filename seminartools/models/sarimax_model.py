@@ -5,15 +5,15 @@ import pandas as pd
 
 class SARIMAXModel(BaseModel):
     """
-    An ARMAX model for forecasting inflation rates.
-    Independent ARMAX per country.
+    A SARIMAX model for forecasting inflation rates.
+    Independent SARIMAX per country.
 
     Args:
         criterion (str): The criterion to use for model selection. Can be "aic" or "bic".
         exogenous_columns (list[str]): The columns to use as exogenous variables.
         country_column (str): The name of the column containing the country names. Used to split the data into countries.
         inflation_column (str): The name of the column containing the inflation rates.
-        Defaults to an empty list, meaning we have an ARMA model per country.
+        Defaults to an empty list, meaning we have a SARIMA model per country (no X).
     """
 
     def __init__(
@@ -49,15 +49,15 @@ class SARIMAXModel(BaseModel):
 
     def _fit_model(self, data: pd.DataFrame):
         """
-        Auto ARIMA model
+        Auto SARIMAX model
 
         Args:
             data (pd.DataFrame): data
                 Has to have a datetime index, and only contain data from a single country
 
         Returns:
-            ARIMAX: best ARIMA model
-            best_order: best order for ARIMA model
+            SARIMAX: best SARIMAX model
+            best_order: best order for SARIMAX model
         """
 
         best_ic = float("inf")
