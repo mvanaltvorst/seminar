@@ -76,7 +76,8 @@ class SARIMAXModel(BaseModel):
                 # quiet
                 model = SARIMAX(
                     data[self.inflation_column],
-                    seasonal_order=(p, 0, q, 4),
+                    order=(p, 0, q),
+                    seasonal_order=(0, 0, 0, 4),
                     exog=data[self.exogenous_columns]
                     if self.exogenous_columns
                     else None,
