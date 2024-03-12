@@ -16,6 +16,8 @@ class VARModel(BaseModel):
         long_format (bool): 
             Whether the data is in long format. If True, the data is expected to have columns "yearmonth", "Country", and "inflation".
             If False, the data is expected to have an index of "yearmonth" and columns for each country.
+            This is useful for the VAR model because this is an intermediate step for the PCA VAR model, and for the PCA VAR
+            model is it useful that we can pass wide format data to this VAR model.
     """
 
     def __init__(
