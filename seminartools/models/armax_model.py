@@ -1,12 +1,16 @@
 from seminartools.models.base_model import BaseModel
-from statsmodels.tsa.statespace.sarimax import SARIMAX
+#from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.arima.model import ARIMA
 import pandas as pd
+import numpy as np
+from scipy.signal import lfilter
+import statsmodels.api as sm
 
 
-class SARIMAXModel(BaseModel):
+class ARMAXModel(BaseModel):
     """
-    A SARIMAX model for forecasting inflation rates.
-    Independent SARIMAX per country.
+    A ARMAX model for forecasting inflation rates.
+    Independent ARMAX per country.
 
     Args:
         criterion (str): The criterion to use for model selection. Can be "aic" or "bic".
@@ -53,15 +57,15 @@ class SARIMAXModel(BaseModel):
 
     def _fit_model(self, data: pd.DataFrame):
         """
-        Auto SARIMAX model
+        Auto ARMAX model
 
         Args:
             data (pd.DataFrame): data
                 Has to have a datetime index, and only contain data from a single country
 
         Returns:
-            SARIMAX: best SARIMAX model
-            best_order: best order for SARIMAX model
+            ARMAX: best ARMAX model
+            best_order: best order for ARMAX model
         """
 
         best_ic = float("inf")
@@ -74,15 +78,23 @@ class SARIMAXModel(BaseModel):
                     continue
 
                 # quiet
-                model = SARIMAX(
+                #model = SARIMAX(
+                    #data[self.inflation_column],
+                    #order=(p, 0, q),
+                    #exog=data[self.exogenous_columns]
+                    #if self.exogenous_columns
+                    #else None,
+                #)
+                # ARMAX
+                model = ARIMA(
                     data[self.inflation_column],
                     order=(p, 0, q),
-                    seasonal_order=(0, 0, 0, 4),
                     exog=data[self.exogenous_columns]
                     if self.exogenous_columns
                     else None,
                 )
-                results = model.fit(disp=False)
+                results = model.fit()
+
                 if self.criterion == "aic":
                     if results.aic < best_ic:
                         best_ic = results.aic
@@ -123,11 +135,44 @@ class SARIMAXModel(BaseModel):
         return pd.DataFrame(predictions)
 
 
+    def _predict_country(self, data: pd.DataFrame, country: str, forecast_periods: int = 1) -> pd.DataFrame:
+        """
+        Predict the inflation rate for the next N periods for a single country using the ARMA part of the model.
+    
+        Args:
+            data (pd.DataFrame): The data for the country, including future values for exogenous variables.
+            country (str): The name of the country for which to make the prediction.
+            forecast_periods (int): The number of periods ahead to forecast.
 
-    def _predict_country(self, data: pd.DataFrame, country: str) -> pd.DataFrame:
+        Returns:
+            pd.DataFrame: A DataFrame with the predictions.
         """
-        Predict the inflation rate for the next month for a single country.
-        """
-        model = self.models[country]
-        forecast_result = model.get_forecast(steps=1, exog=data[self.exogenous_columns].iloc[-1].values.reshape(1, -1))
-        return forecast_result.predicted_mean[0]
+
+
+        # Extract model coefficients
+        ar_coefs = self.models[country].arparams
+        ma_coefs = self.models[country].maparams
+        const = self.models[country].params['const']
+
+        adjusted_series = (data[self.inflation_column] - const).to_numpy()
+        epsilons = np.zeros(len(adjusted_series))
+        for i in range(max(len(ar_coefs), len(ma_coefs)), len(adjusted_series)):
+            forecast = 0
+            for j in range(len(ar_coefs)):
+                forecast += ar_coefs[j] * adjusted_series[i - j - 1]
+
+            for j in range(len(ma_coefs)):
+                forecast += ma_coefs[j] * epsilons[i - j - 1]
+
+            epsilons[i] = adjusted_series[i] - forecast
+        
+        forecast = 0
+        for i in range(len(ar_coefs)):
+            forecast += ar_coefs[i] * adjusted_series[-i - 1]
+        
+        for i in range(len(ma_coefs)):
+            forecast += ma_coefs[i] * epsilons[-i - 1]
+
+        pd.Series(epsilons).plot()
+
+        return forecast + const
