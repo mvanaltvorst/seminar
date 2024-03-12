@@ -22,11 +22,15 @@ class SARIMAXModel(BaseModel):
         exogenous_columns: list[str] = [],
         country_column: str = "Country",
         inflation_column: str = "inflation",
+        max_p: int = 3,
+        max_q: int = 3,
     ):
         self.criterion = criterion
         self.exogenous_columns = exogenous_columns
         self.country_column = country_column
         self.inflation_column = inflation_column
+        self.max_p = max_p
+        self.max_q = max_q
 
     def fit(self, data: pd.DataFrame):
         """
@@ -64,8 +68,8 @@ class SARIMAXModel(BaseModel):
         best_order = None
         best_model = None
 
-        for p in range(6):
-            for q in range(6):
+        for p in range(self.max_p + 1):
+            for q in range(self.max_q + 1):
                 if p == 0 and q == 0:
                     continue
 
@@ -82,12 +86,12 @@ class SARIMAXModel(BaseModel):
                     if results.aic < best_ic:
                         best_ic = results.aic
                         best_order = (p, q)
-                        best_model = model
+                        best_model = results
                 elif self.criterion == "bic":
                     if results.bic < best_ic:
                         best_ic = results.bic
                         best_order = (p, q)
-                        best_model = model
+                        best_model = results
 
                 # except Exception as e:
                 #     print(f"Error with order {(p, d, q)}: {e}")
@@ -104,9 +108,25 @@ class SARIMAXModel(BaseModel):
         predictions = []
 
         for country in countries:
-            country_data = data.loc[country]
+            country_data = data[data[self.country_column] == country]
             country_data = country_data.set_index("yearmonth")
             prediction = self._predict_country(country_data, country)
-            predictions.append(prediction)
+            prediction_index = country_data.index[-1] + pd.DateOffset(months=3)
 
-        return pd.concat(predictions)
+            predictions.append({
+                "yearmonth": prediction_index,
+                "Country": country,
+                "inflation": prediction
+            })
+
+        return pd.DataFrame(predictions)
+
+
+
+    def _predict_country(self, data: pd.DataFrame, country: str) -> pd.DataFrame:
+        """
+        Predict the inflation rate for the next month for a single country.
+        """
+        model = self.models[country]
+        forecast_result = model.get_forecast(steps=1, exog=data[self.exogenous_columns].iloc[-1].values.reshape(1, -1))
+        return forecast_result.predicted_mean[0]

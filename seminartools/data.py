@@ -57,6 +57,7 @@ def read_inflation(
         return f"{year}-{month:02d}"
 
     df_hcpi["yearmonth"] = df_hcpi["yearmonth"].apply(into_datetime)
+    df_hcpi["yearmonth"] = pd.to_datetime(df_hcpi["yearmonth"])
 
     # if hcpi is 0, replace with NaN
     df_hcpi["hcpi"] = df_hcpi["hcpi"].replace(0, np.nan)
