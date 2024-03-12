@@ -122,6 +122,8 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.seminar_forecasting
+seminar_forecasting/
 env/
 venv/
 ENV/
