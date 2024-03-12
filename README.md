@@ -1,4 +1,11 @@
 # Seminar
+## Installation
+
+```bash
+cd seminartools/
+pip install -e .
+```
+
 ## Potential models
 ### ARMAX model
 Should fit an ARMAX model on each individual country, and use AIC to select the best model per country (could differ per country).
