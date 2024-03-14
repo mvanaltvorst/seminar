@@ -66,6 +66,7 @@ Important:
 ### Brier score to evaluate forecast accuracy
 
 ### DIC comparison of models
+### Or BPIC to avoid overfitting
 
 ## Plots to make
 - `alpha[i]` on world map
