@@ -16,3 +16,6 @@ A subset of countries already have data from 1960. Most other countries at least
 ### 'Monthly_interest_rates.xlsx'
 Monthly central bank policy rates from the BIS. https://data.bis.org/topics/CBPOL/data
 The data ranges from 1970-2023. However, for quite some countries, the data only starts from 1990 onwards.
+
+### Distance data
+Taken from http://www.cepii.fr/CEPII/en/bdd_modele/bdd_modele_item.asp?id=6
