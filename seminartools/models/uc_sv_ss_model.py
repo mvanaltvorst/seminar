@@ -32,16 +32,12 @@ class UCSVSSModel(BaseModel):
     # Uses intermediate states to quickly evaluate the model on new data
     REQUIRES_ANTE_FULL_FIT = True
 
-    def __init__(
-        self,
-        num_particles: int,
-        stochastic_seasonality: bool
-    ):
+    def __init__(self, num_particles: int, stochastic_seasonality: bool):
         self.num_particles = num_particles
         self.country_column = "Country"
 
         self.gamma = GAMMA
-        
+
         # No stochastic seasonality is equivalent to theta = 0
         if stochastic_seasonality:
             self.theta = THETA
@@ -59,8 +55,6 @@ class UCSVSSModel(BaseModel):
         else:
             self.vague_prior_delta_sigma = 0
         self.vague_prior_tau_sigma = VAGUE_PRIOR_TAU_SIGMA
-
-
 
     def fit(self, data: pd.DataFrame):
         """
@@ -95,7 +89,9 @@ class UCSVSSModel(BaseModel):
             size=self.num_particles, loc=1, scale=self.vague_prior_tau_sigma
         )
         X0[:, 1] = np.random.normal(
-            size=self.num_particles, loc=self.init_lnsetasq, scale=self.vague_prior_lnsetasq_sigma
+            size=self.num_particles,
+            loc=self.init_lnsetasq,
+            scale=self.vague_prior_lnsetasq_sigma,
         )
         X0[:, 2] = np.random.normal(
             size=self.num_particles,
@@ -137,8 +133,12 @@ class UCSVSSModel(BaseModel):
             # Step 1: predict and update
             W[t, :] = np.ones(self.num_particles) / self.num_particles
             for i in range(self.num_particles):
-                X[t, i, 1] = np.random.normal(loc=X[t - 1, i, 1], scale=np.sqrt(self.gamma))
-                X[t, i, 2] = np.random.normal(loc=X[t - 1, i, 2], scale=np.sqrt(self.gamma))
+                X[t, i, 1] = np.random.normal(
+                    loc=X[t - 1, i, 1], scale=np.sqrt(self.gamma)
+                )
+                X[t, i, 2] = np.random.normal(
+                    loc=X[t - 1, i, 2], scale=np.sqrt(self.gamma)
+                )
                 X[t, i, 3] = (
                     np.random.normal(loc=X[t - 1, i, 3], scale=np.sqrt(self.theta))
                     if seas(0, t)
@@ -163,20 +163,26 @@ class UCSVSSModel(BaseModel):
                 delta_mean = np.mean(X[t, i, 3:7])
                 X[t, i, 3:7] -= delta_mean
 
-                # add the seasonal noise
-                X[t, i, 0] = (
-                    np.random.normal(
-                        loc=X[t - 1, i, 0], scale=np.sqrt(np.exp(X[t, i, 2]))
-                    )
-                    + X[t, i, 3] * seas(0, t)
-                    + X[t, i, 4] * seas(1, t)
-                    + X[t, i, 5] * seas(2, t)
-                    + X[t, i, 6] * seas(3, t)
+                # add the epsilon noise
+                X[t, i, 0] = np.random.normal(
+                    loc=X[t - 1, i, 0], scale=np.sqrt(np.exp(X[t, i, 2]))
                 )
 
-            mean_vals = X[t, :, 0]
+            # Mean of pi is tau + delta_1 * seas_1 + ... + delta_4 * seas_4
+            mean_vals = (
+                X[t, :, 0]
+                + X[t, i, 3] * seas(0, t)
+                + X[t, i, 4] * seas(1, t)
+                + X[t, i, 5] * seas(2, t)
+                + X[t, i, 6] * seas(3, t),
+            )
             scale_vals = np.sqrt(np.exp(X[t, :, 1]))
-            W[t, :] *= scipy.stats.norm.pdf(pi[t - 1], loc=mean_vals, scale=scale_vals)
+
+            W[t, :] *= scipy.stats.norm.pdf(
+                pi[t - 1],
+                loc=mean_vals,
+                scale=scale_vals,
+            )
             if np.sum(W[t, :]) == 0:
                 print("WARNING: All weights are zero. Resampling will fail.")
                 print("(country: {})".format(data["Country"].iloc[0]))
@@ -193,6 +199,7 @@ class UCSVSSModel(BaseModel):
             {
                 "yearmonth": data["yearmonth"].values,
                 "etau": X[1:, :, 0].mean(axis=1) / 100,  # convert back to percentage
+                "etauplusdeltas": np.nan, # TODO
                 "elnsetasq": X[1:, :, 1].mean(axis=1),  # OTHER SCALE!
                 "esigmaeta": np.sqrt(np.exp(X[1:, :, 1])).mean(axis=1),
                 "elnsepsilonsq": X[1:, :, 2].mean(axis=1),
