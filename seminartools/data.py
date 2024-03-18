@@ -60,7 +60,7 @@ def read_inflation(
     df_hcpi["yearmonth"] = pd.to_datetime(df_hcpi["yearmonth"])
 
     # if hcpi is 0, replace with NaN
-    df_hcpi["hcpi"] = df_hcpi["hcpi"].replace(0, np.nan)
+    df_hcpi.loc[df_hcpi["hcpi"].abs() < 1e-6, "hcpi"] = np.nan
     df_hcpi = df_hcpi[df_hcpi["hcpi"].notna()]
 
     if drop_non_complete_countries:
