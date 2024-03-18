@@ -61,6 +61,8 @@ def read_inflation(
 
     # if hcpi is 0, replace with NaN
     df_hcpi.loc[df_hcpi["hcpi"].abs() < 1e-6, "hcpi"] = np.nan
+    # for Iceland, 0.1 seems to be a placeholder for missing data
+    df_hcpi.loc[((df_hcpi["hcpi"] - 0.1).abs() < 1e-6) & (df_hcpi["Country"] == "Iceland"), "hcpi"] = np.nan
     df_hcpi = df_hcpi[df_hcpi["hcpi"].notna()]
 
     if drop_non_complete_countries:
