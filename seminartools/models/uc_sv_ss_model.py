@@ -12,7 +12,7 @@ from multiprocessing import cpu_count
 GAMMA = 0.2
 
 # zeta follows a normal distribution with variance theta
-THETA = 0.02
+THETA = 0.002
 
 INIT_LNSETASQ = 0
 INIT_LNSEPSILONSQ = 0
