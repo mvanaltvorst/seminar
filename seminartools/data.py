@@ -103,7 +103,7 @@ def read_inflation(
 
     return df
 
-
+# TODO: date fucked up, not quarters
 def read_commodity(
     *,
     filepath="./../../assets/CMO-Historical-Data-Monthly.xlsx",
@@ -152,6 +152,13 @@ def read_commodity(
     df = df.resample("Q").mean()
     if first_difference:
         df = df.pct_change().dropna()
+
+    if mergeable_format:
+        # index: date
+        # columns: commodity_{commodity_name}
+        df = df.add_prefix("commodity_")
+        df = df.rename_axis("date")
+
     return df
 
 
