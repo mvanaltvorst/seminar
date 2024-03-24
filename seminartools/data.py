@@ -150,6 +150,8 @@ def read_commodity(
     df = df.apply(pd.to_numeric, errors="coerce").dropna().rename_axis("Date")
     df.index = pd.to_datetime(df.index, format="%YM%m")
     df = df.resample("Q").mean()
+    df.index = df.index - pd.tseries.offsets.QuarterBegin(startingMonth=1)
+
     if first_difference:
         df = df.pct_change().dropna()
 
@@ -235,6 +237,13 @@ def read_gdp_growth(
         # Add median column
         df["median"] = df.median(axis=1)
 
+    if mergeable_format:
+        df = df.rename_axis("date")
+        df = df.stack().reset_index().rename(columns = {
+            "Period": "country",
+            0: "gdp_growth"
+        }).set_index(["country", "date"])
+
     return df
 
 
@@ -267,6 +276,15 @@ def read_interest_rate(
     df.columns = [col.split(":")[1] for col in df.columns]
     # Quarterly average
     df = df.resample("Q").mean()
+    df.index = df.index - pd.tseries.offsets.QuarterBegin(startingMonth=1)
+
+
+    if mergeable_format:
+        df = df.rename_axis("date").stack().reset_index().rename(columns = {
+            "level_1": "country",
+            0: "interest_rate"
+        }).set_index(["country", "date"])
+
     return df
 
 
@@ -298,6 +316,12 @@ def read_unemployment(
 
     if add_median:
         df["median"] = df.median(axis=1)
+
+    if mergeable_format:
+        df = df.rename_axis("date").stack().reset_index().rename(columns={
+            "level_1": "country",
+            0: "unemployment_rate"
+        }).set_index(["country", "date"])
 
     return df
 
