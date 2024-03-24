@@ -149,7 +149,7 @@ def read_gdp_growth(
     sheet_name="Quarterly real GDP growth",
     header=5,
     skipfooter=5,
-    add_median=True,
+    add_median=False,
 ):
     """
     Reads GDP growth data from the GDP-growth.xlsx file and returns a dataframe.
@@ -217,13 +217,20 @@ def read_gdp_growth(
 
     return df
 
+
 # TODO: the time periods of this data are fucked up
 # (quarters don't align)
 def read_interest_rate(
     *,
     filepath="./../../assets/Monthly_interest_rates.xlsx",
-    drop_columns = ['DATAFLOW_ID:Dataflow ID', 'KEY:Timeseries Key', 'FREQ:Frequency', 'Unit', 'Unit multiplier',
-       'TIME_PERIOD:Period'],
+    drop_columns=[
+        "DATAFLOW_ID:Dataflow ID",
+        "KEY:Timeseries Key",
+        "FREQ:Frequency",
+        "Unit",
+        "Unit multiplier",
+        "TIME_PERIOD:Period",
+    ],
 ):
     """
     Reads interest rate data from the Monthly_interest_rates.xlsx file and returns a dataframe.
@@ -232,11 +239,47 @@ def read_interest_rate(
     df = df.drop(columns=drop_columns)
     df = df.set_index("REF_AREA:Reference area")
     df = df.T
-    df.index.rename('Date', inplace=True)
+    df.index.rename("Date", inplace=True)
     df.index = pd.to_datetime(df.index) - pd.offsets.MonthBegin(1)
-    df = df.dropna(axis = 1, how = "all") # Drop columns with all NaN values
+    df = df.dropna(axis=1, how="all")  # Drop columns with all NaN values
     # rename columns
     df.columns = [col.split(":")[1] for col in df.columns]
     # Quarterly average
     df = df.resample("Q").mean()
     return df
+
+
+def unemployment_data(
+    *,
+    filepath="./../../assets/unemployment-ilo.csv",
+    add_median=False
+):
+    """
+    Read unemployment data into a dataframe.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the csv file.
+    add_median : bool
+        If True, add a column with the median unemployment rate across countries.
+    """
+    df = pd.read_csv(filepath).drop(["Sex", "Age"], axis=1).set_index("Quarter")
+
+    df.dropna(axis = 1, how = "all", inplace = True) # Drop columns with all NaN values
+
+    df.index = pd.PeriodIndex(
+        df.index, freq = "Q"
+    ).to_timestamp() # Convert the index to a datetime object
+
+    df.sort_index(inplace = True) 
+
+    if add_median:
+        df["median"] = df.median(axis=1)
+
+    return df
+
+
+
+
+
