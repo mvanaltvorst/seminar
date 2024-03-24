@@ -149,11 +149,13 @@ def read_commodity(
     df = pd.concat([df_1, df_2], axis=1)[relevant_variables]
     df = df.apply(pd.to_numeric, errors="coerce").dropna().rename_axis("Date")
     df.index = pd.to_datetime(df.index, format="%YM%m")
-    df = df.resample("Q").mean()
-    df.index = df.index - pd.tseries.offsets.QuarterBegin(startingMonth=1)
 
     if first_difference:
         df = df.pct_change().dropna()
+        df = df.resample("Q").apply(lambda x: (1 + x).prod() - 1) # quarterly return
+    else:
+        df = df.resample("Q").mean() # mean of the quarter
+    df.index = df.index - pd.tseries.offsets.QuarterBegin(startingMonth=1)
 
     if mergeable_format:
         # index: date
@@ -275,7 +277,7 @@ def read_interest_rate(
     # rename columns
     df.columns = [col.split(":")[1] for col in df.columns]
     # Quarterly average
-    df = df.resample("Q").mean()
+    df = df.resample("Q").mean() # Mean interest rate
     df.index = df.index - pd.tseries.offsets.QuarterBegin(startingMonth=1)
 
 
