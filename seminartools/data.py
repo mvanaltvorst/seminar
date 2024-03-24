@@ -8,7 +8,7 @@ def read_inflation(
     sheet_name="hcpi_q",
     drop_non_complete_countries=True,
     first_difference=True,
-    drop_countries = ["Iceland", "Colombia", "Indonesia"]
+    drop_countries=["Iceland", "Colombia", "Indonesia"],
 ):
     """
     Read the hcpi data from the world bank excel file and return a dataframe.
@@ -91,3 +91,47 @@ def read_inflation(
         return df_hcpi_pct_change
     else:
         return df_hcpi
+
+
+def read_commodity(
+    *,
+    filepath="./../../assets/CMO-Historical-Data-Monthly.xlsx",
+    sheet_name_1="Monthly Prices",
+    sheet_name_2="Monthly Indices",
+    header_table_1=6,
+    header_table_2=9,
+    first_difference=True,
+    relevant_variables=['CRUDE_PETRO', 'iNATGAS', 'iAGRICULTURE', 'iMETMIN', 'iPRECIOUSMET']
+):
+    """
+    Reads commodity price data from the CMO-Historical-Data-Monthly.xlsx file and returns a dataframe.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the excel file.
+    sheet_name : str
+        Name of the sheet in the excel file.
+    header_table_1 : int
+        Index of the header of the first table.
+    header_table_2 : int
+        Index of the header of the second table.
+    first_difference : bool
+        If True, compute the first difference of the commodity prices.
+        if False, return the commodity prices as is.
+    relevant_variables : list[str]
+        List of relevant variables to keep in the dataframe.
+    """
+    df_1 = pd.read_excel(filepath, sheet_name=sheet_name_1, header=header_table_1).set_index("Unnamed: 0", drop = True)
+    df_2 = pd.read_excel(filepath, sheet_name=sheet_name_2, header=header_table_2).set_index("Unnamed: 0", drop = True)
+    df = pd.concat([df_1, df_2], axis=1)[relevant_variables] 
+    df = df.apply(pd.to_numeric, errors='coerce').dropna().rename_axis("Date")
+    df.index = pd.to_datetime(df.index, format = "%YM%m")
+    df = df.resample('Q').mean()
+    if first_difference:
+        df = df.pct_change().dropna()
+    return df
+
+
+
+
