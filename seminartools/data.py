@@ -9,6 +9,7 @@ def read_inflation(
     drop_non_complete_countries=True,
     first_difference=True,
     drop_countries=["Iceland", "Colombia", "Indonesia"],
+    mergeable_format = False,
 ):
     """
     Read the hcpi data from the world bank excel file and return a dataframe.
@@ -79,7 +80,9 @@ def read_inflation(
         ]
         df_hcpi
 
+    column_of_importance = "hcpi"
     if first_difference:
+        column_of_importance = "inflation"
         df_hcpi_pct_change = df_hcpi.sort_values("yearmonth")
 
         df_hcpi_pct_change["hcpi"] = df_hcpi_pct_change.groupby("Country")[
@@ -88,9 +91,17 @@ def read_inflation(
         df_hcpi_pct_change = df_hcpi_pct_change.rename(columns={"hcpi": "inflation"})
         # drop na's
         df_hcpi_pct_change = df_hcpi_pct_change.dropna()
-        return df_hcpi_pct_change
+        df = df_hcpi_pct_change
     else:
-        return df_hcpi
+        df = df_hcpi
+
+    if mergeable_format:
+        df = df[["Country", "yearmonth", column_of_importance]].rename(columns = {
+            "Country": "country",
+            "yearmonth": "date"
+        }).set_index(["country", "date"])
+
+    return df
 
 
 def read_commodity(
@@ -108,6 +119,7 @@ def read_commodity(
         "iMETMIN",
         "iPRECIOUSMET",
     ],
+    mergeable_format = False,
 ):
     """
     Reads commodity price data from the CMO-Historical-Data-Monthly.xlsx file and returns a dataframe.
@@ -150,6 +162,7 @@ def read_gdp_growth(
     header=5,
     skipfooter=5,
     add_median=False,
+    mergeable_format = False,
 ):
     """
     Reads GDP growth data from the GDP-growth.xlsx file and returns a dataframe.
@@ -231,6 +244,7 @@ def read_interest_rate(
         "Unit multiplier",
         "TIME_PERIOD:Period",
     ],
+    mergeable_format = False,
 ):
     """
     Reads interest rate data from the Monthly_interest_rates.xlsx file and returns a dataframe.
@@ -249,10 +263,11 @@ def read_interest_rate(
     return df
 
 
-def unemployment_data(
+def read_unemployment(
     *,
     filepath="./../../assets/unemployment-ilo.csv",
-    add_median=False
+    add_median=False,
+    mergeable_format = False,
 ):
     """
     Read unemployment data into a dataframe.
