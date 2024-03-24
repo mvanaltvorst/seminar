@@ -216,3 +216,27 @@ def read_gdp_growth(
         df["median"] = df.median(axis=1)
 
     return df
+
+# TODO: the time periods of this data are fucked up
+# (quarters don't align)
+def read_interest_rate(
+    *,
+    filepath="./../../assets/Monthly_interest_rates.xlsx",
+    drop_columns = ['DATAFLOW_ID:Dataflow ID', 'KEY:Timeseries Key', 'FREQ:Frequency', 'Unit', 'Unit multiplier',
+       'TIME_PERIOD:Period'],
+):
+    """
+    Reads interest rate data from the Monthly_interest_rates.xlsx file and returns a dataframe.
+    """
+    df = pd.read_excel(filepath)
+    df = df.drop(columns=drop_columns)
+    df = df.set_index("REF_AREA:Reference area")
+    df = df.T
+    df.index.rename('Date', inplace=True)
+    df.index = pd.to_datetime(df.index) - pd.offsets.MonthBegin(1)
+    df = df.dropna(axis = 1, how = "all") # Drop columns with all NaN values
+    # rename columns
+    df.columns = [col.split(":")[1] for col in df.columns]
+    # Quarterly average
+    df = df.resample("Q").mean()
+    return df
