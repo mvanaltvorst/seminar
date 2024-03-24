@@ -10,6 +10,10 @@ def read_inflation(
     first_difference=True,
     drop_countries=["Iceland", "Colombia", "Indonesia"],
     mergeable_format = False,
+    country_remaps = {
+        "Korea, Rep.": "Korea",
+        "Turkey": "Türkiye",
+    }
 ):
     """
     Read the hcpi data from the world bank excel file and return a dataframe.
@@ -99,7 +103,9 @@ def read_inflation(
         df = df[["Country", "yearmonth", column_of_importance]].rename(columns = {
             "Country": "country",
             "yearmonth": "date"
-        }).set_index(["country", "date"])
+        })
+        df = df.replace({"country": country_remaps})
+        df = df.set_index(["country", "date"])
 
     return df
 
@@ -174,6 +180,9 @@ def read_gdp_growth(
     skipfooter=5,
     add_median=False,
     mergeable_format = False,
+    country_remaps = {
+        "China (People's Republic of)": "China"
+    }
 ):
     """
     Reads GDP growth data from the GDP-growth.xlsx file and returns a dataframe.
@@ -244,7 +253,9 @@ def read_gdp_growth(
         df = df.stack().reset_index().rename(columns = {
             "Period": "country",
             0: "gdp_growth"
-        }).set_index(["country", "date"])
+        })
+        df = df.replace({"country": country_remaps})
+        df = df.set_index(["country", "date"])
 
     return df
 
@@ -295,6 +306,10 @@ def read_unemployment(
     filepath="./../../assets/unemployment-ilo.csv",
     add_median=False,
     mergeable_format = False,
+    country_remaps = {
+        "Korea, Republic of": "Korea",
+        "Russian Federation": "Russia",
+    }
 ):
     """
     Read unemployment data into a dataframe.
@@ -323,7 +338,9 @@ def read_unemployment(
         df = df.rename_axis("date").stack().reset_index().rename(columns={
             "level_1": "country",
             0: "unemployment_rate"
-        }).set_index(["country", "date"])
+        })
+        df = df.replace({"country": country_remaps})
+        df = df.set_index(["country", "date"])
 
     return df
 
