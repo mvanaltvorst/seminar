@@ -10,6 +10,10 @@ def read_inflation(
     first_difference=True,
     drop_countries=["Iceland", "Colombia", "Indonesia"],
     mergeable_format = False,
+    country_remaps = {
+        "Korea, Rep.": "Korea",
+        "Turkey": "Türkiye",
+    }
 ):
     """
     Read the hcpi data from the world bank excel file and return a dataframe.
@@ -99,7 +103,9 @@ def read_inflation(
         df = df[["Country", "yearmonth", column_of_importance]].rename(columns = {
             "Country": "country",
             "yearmonth": "date"
-        }).set_index(["country", "date"])
+        })
+        df = df.replace({"country": country_remaps})
+        df = df.set_index(["country", "date"])
 
     return df
 
@@ -149,9 +155,13 @@ def read_commodity(
     df = pd.concat([df_1, df_2], axis=1)[relevant_variables]
     df = df.apply(pd.to_numeric, errors="coerce").dropna().rename_axis("Date")
     df.index = pd.to_datetime(df.index, format="%YM%m")
-    df = df.resample("Q").mean()
+
     if first_difference:
         df = df.pct_change().dropna()
+        df = df.resample("Q").apply(lambda x: (1 + x).prod() - 1) # quarterly return
+    else:
+        df = df.resample("Q").mean() # mean of the quarter
+    df.index = df.index - pd.tseries.offsets.QuarterBegin(startingMonth=1)
 
     if mergeable_format:
         # index: date
@@ -170,6 +180,9 @@ def read_gdp_growth(
     skipfooter=5,
     add_median=False,
     mergeable_format = False,
+    country_remaps = {
+        "China (People's Republic of)": "China"
+    }
 ):
     """
     Reads GDP growth data from the GDP-growth.xlsx file and returns a dataframe.
@@ -235,6 +248,15 @@ def read_gdp_growth(
         # Add median column
         df["median"] = df.median(axis=1)
 
+    if mergeable_format:
+        df = df.rename_axis("date")
+        df = df.stack().reset_index().rename(columns = {
+            "Period": "country",
+            0: "gdp_growth"
+        })
+        df = df.replace({"country": country_remaps})
+        df = df.set_index(["country", "date"])
+
     return df
 
 
@@ -266,7 +288,16 @@ def read_interest_rate(
     # rename columns
     df.columns = [col.split(":")[1] for col in df.columns]
     # Quarterly average
-    df = df.resample("Q").mean()
+    df = df.resample("Q").mean() # Mean interest rate
+    df.index = df.index - pd.tseries.offsets.QuarterBegin(startingMonth=1)
+
+
+    if mergeable_format:
+        df = df.rename_axis("date").stack().reset_index().rename(columns = {
+            "level_1": "country",
+            0: "interest_rate"
+        }).set_index(["country", "date"])
+
     return df
 
 
@@ -275,6 +306,10 @@ def read_unemployment(
     filepath="./../../assets/unemployment-ilo.csv",
     add_median=False,
     mergeable_format = False,
+    country_remaps = {
+        "Korea, Republic of": "Korea",
+        "Russian Federation": "Russia",
+    }
 ):
     """
     Read unemployment data into a dataframe.
@@ -298,6 +333,14 @@ def read_unemployment(
 
     if add_median:
         df["median"] = df.median(axis=1)
+
+    if mergeable_format:
+        df = df.rename_axis("date").stack().reset_index().rename(columns={
+            "level_1": "country",
+            0: "unemployment_rate"
+        })
+        df = df.replace({"country": country_remaps})
+        df = df.set_index(["country", "date"])
 
     return df
 
