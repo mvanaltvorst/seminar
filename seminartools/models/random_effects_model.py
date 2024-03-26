@@ -50,8 +50,8 @@ class RandomEffectsModel(BaseModel):
             "commodity_iMETMIN",
             "commodity_iPRECIOUSMET",
         ],
-        burn: int = 500,
-        draws: int = 5000,
+        tune: int = 500,
+        draws: int = 50000,
     ):
         """
         Initializes the model.
@@ -63,7 +63,7 @@ class RandomEffectsModel(BaseModel):
         self.inference_method, self.chains = _get_inference_method_chains()
 
         # MCMC parameters
-        self.burn = burn
+        self.tune = tune
         self.draws = draws
 
         # Build the formula to be used by Bambi
@@ -75,7 +75,7 @@ class RandomEffectsModel(BaseModel):
             for i in range(1, lags + 1)
             for col in exogenous_columns + [target_column]
         ]
-        self.formula += " + ".join(exogenous_columns + lagged_exog_columns)
+        self.formula += " + ".join(lagged_exog_columns)
 
     def fit(self, data: pd.DataFrame):
         """
@@ -109,7 +109,7 @@ class RandomEffectsModel(BaseModel):
         self.results = self.model.fit(
             inference_method=self.inference_method,
             draws=self.draws,
-            tune=self.burn,
+            tune=self.tune,
             chains=self.chains,
         )
 
