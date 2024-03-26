@@ -7,7 +7,7 @@ consumer price index (CPI) inflation
 The data including commodities prices comes from the World Bank. https://www.worldbank.org/en/research/brief/inflation-database. Simply go to the subsection "Data Download".
 
 ### Unemployment `unemployment-ilo.csv`
-Unemployment data comes from the ILO. https://www.ilo.org/shinyapps/bulkexplorer9/?lang=en&segment=indicator&id=UNE_2EAP_SEX_AGE_RT_A. Filter Sex="Total", Age="Aggregate Bands: Total", Datasets="Unemployment rate by sex and age (%) - Quarterly", Pivot Items="Country".
+Unemployment data comes from the ILO. https://rshiny.ilo.org/dataexplorer4/?lang=en&id=UNE_DEAP_SEX_AGE_RT_Q. Filter Sex="Total", Age="Aggregate Bands: Total", Datasets="Unemployment rate by sex and age (%) - Quarterly", Pivot Items="Country".
 
 ### GDP `GDP-growth.xlsx`
 Quarterly GDP growth data comes from OECD. https://stats.oecd.org/index.aspx?queryid=350#
