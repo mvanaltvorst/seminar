@@ -289,12 +289,7 @@ def read_gdp_level(
         If True, add a column with the median GDP growth rate across countries.
     """
 
-    df_gdp = pd.read_excel(
-    filepath,
-    sheet_name= sheet_name,
-    header= header,
-    skipfooter= skipfooter
-    )
+    df_gdp = pd.read_excel(filepath, sheet_name= sheet_name,header= header,skipfooter= skipfooter)
 
     #handle weird indent for last ten countries
     df_gdp.iloc[-10:,0]   = df_gdp.iloc[-10:,1]
