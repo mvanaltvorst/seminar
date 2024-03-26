@@ -1,10 +1,11 @@
 import pandas as pd
 import numpy as np
-import bami as bmb
+import bambi as bmb
 from .base_model import BaseModel
+import arviz as az
 
 
-def _get_inference_method():
+def _get_inference_method_chains():
     """
     Bambi is quicker with nuts_blackjax if you have a NVIDIA GPU.
 
@@ -18,18 +19,19 @@ def _get_inference_method():
     str
         Inference method to use.
     """
-    # if gpu available
     inference_method = "mcmc"
+    chains = 4
     try:
         import jax
 
         if jax.device_count() > 0:
             inference_method = "nuts_blackjax"
-            print("GPU time")
+            chains = 1  # NUTS is not parallelizable
+            print("GPU!!!")
     except ImportError:
         pass
 
-    return inference_method
+    return inference_method, chains
 
 
 class RandomEffectsModel(BaseModel):
@@ -48,8 +50,8 @@ class RandomEffectsModel(BaseModel):
             "commodity_iMETMIN",
             "commodity_iPRECIOUSMET",
         ],
-        burn: int = 1000,
-        draws: int = 1000,
+        burn: int = 500,
+        draws: int = 5000,
     ):
         """
         Initializes the model.
@@ -58,8 +60,8 @@ class RandomEffectsModel(BaseModel):
         self.country_column = country_column
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
-        self.inference_method = _get_inference_method()
-        
+        self.inference_method, self.chains = _get_inference_method_chains()
+
         # MCMC parameters
         self.burn = burn
         self.draws = draws
@@ -79,6 +81,9 @@ class RandomEffectsModel(BaseModel):
         """
         Fits the model on data.
         """
+
+        # Get country out of the multiindex
+        data = data.reset_index(level=self.country_column)
 
         countries = data[self.country_column].unique()
         if len(countries) <= 1:
@@ -102,7 +107,10 @@ class RandomEffectsModel(BaseModel):
         # Fit the model
         self.model = bmb.Model(self.formula, data=data)
         self.results = self.model.fit(
-            inference=self.inference_method, draws=self.draws, tune=self.burn
+            inference_method=self.inference_method,
+            draws=self.draws,
+            tune=self.burn,
+            chains=self.chains,
         )
 
     def _create_lagged_variables(self, data: pd.DataFrame):
@@ -117,13 +125,24 @@ class RandomEffectsModel(BaseModel):
 
         return data
 
-    def predict(self, data: pd.DataFrame):
+    def predict(self, data: pd.DataFrame, pointwise_aggregation_method: str = "mean"):
         """
         Predicts the target variable on data.
         """
+        # Get country out of the multiindex
+        data = data.reset_index(level=self.country_column)
+
         data = self._create_lagged_variables(data)
         data = data.dropna()
 
         # Predict using the model that was fit
-        predictions = self.model.predict(data)
-        
+        predictions = self.model.predict(self.results, data = data, inplace = False)
+
+        if pointwise_aggregation_method == "mean":
+            predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean("sample")
+        else:
+            raise ValueError(f"Unknown pointwise aggregation method: {pointwise_aggregation_method}")
+
+        data["predictions"] = predictions
+
+        return data.reset_index().set_index([self.country_column, "date"])["predictions"].rename("inflation").to_frame()
