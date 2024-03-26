@@ -21,17 +21,22 @@ def _get_inference_method_chains():
     """
     inference_method = "mcmc"
     chains = 4
-    try:
-        import jax
+    num_draws = 500
+    
 
-        if jax.device_count() > 0:
-            inference_method = "nuts_blackjax"
-            chains = 1  # NUTS is not parallelizable
-            print("GPU!!!")
-    except ImportError:
-        pass
+    #TODO: WHY DOES JAX GPU BACKEND NOT WORK???
+    # try:
+    #     import jax
 
-    return inference_method, chains
+    #     if jax.device_count() > 0:
+    #         inference_method = "nuts_blackjax"
+    #         chains = 1  # NUTS is not parallelizable
+    #         num_draws = 25000
+    #         print("GPU!!!")
+    # except ImportError:
+    #     pass
+
+    return inference_method, chains, num_draws
 
 
 class RandomEffectsModel(BaseModel):
@@ -50,8 +55,7 @@ class RandomEffectsModel(BaseModel):
             "commodity_iMETMIN",
             "commodity_iPRECIOUSMET",
         ],
-        tune: int = 500,
-        draws: int = 50000,
+        tune: int = 100,
     ):
         """
         Initializes the model.
@@ -60,11 +64,12 @@ class RandomEffectsModel(BaseModel):
         self.country_column = country_column
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
-        self.inference_method, self.chains = _get_inference_method_chains()
+        self.inference_method, self.chains, self.num_draws = (
+            _get_inference_method_chains()
+        )
 
         # MCMC parameters
         self.tune = tune
-        self.draws = draws
 
         # Build the formula to be used by Bambi
         self.formula = f"{target_column} ~ "
@@ -108,9 +113,10 @@ class RandomEffectsModel(BaseModel):
         self.model = bmb.Model(self.formula, data=data)
         self.results = self.model.fit(
             inference_method=self.inference_method,
-            draws=self.draws,
+            draws=self.num_draws,
             tune=self.tune,
             chains=self.chains,
+            cores=self.chains,
         )
 
     def _create_lagged_variables(self, data: pd.DataFrame):
@@ -119,14 +125,17 @@ class RandomEffectsModel(BaseModel):
 
         Takes into account that the data is grouped by country.
         """
+
         def _add_lags(country_df):
             for i in range(1, self.lags + 1):
                 for col in self.exogenous_columns + [self.target_column]:
-                    country_df[f"{col}_lag_{i}"] = country_df[col].shift(i, freq = pd.DateOffset(months=3))
+                    country_df[f"{col}_lag_{i}"] = country_df[col].shift(
+                        i, freq=pd.DateOffset(months=3)
+                    )
 
             return country_df
 
-        return data.groupby(self.country_column, group_keys = False).apply(_add_lags)
+        return data.groupby(self.country_column, group_keys=False).apply(_add_lags)
 
     def predict(self, data: pd.DataFrame, pointwise_aggregation_method: str = "mean"):
         """
