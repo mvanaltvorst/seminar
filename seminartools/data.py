@@ -378,6 +378,19 @@ def read_interest_rate(
     df.index.rename("Date", inplace=True)
     df.index = pd.to_datetime(df.index) - pd.offsets.MonthBegin(1)
     df = df.dropna(axis=1, how="all")  # Drop columns with all NaN values
+
+    rows = df.index.get_loc("1999-01-31")
+    euro_index = df.columns.get_loc("XM:Euro area")
+    df_subset = df.iloc[rows:]
+
+    # for all countries who only have missing values after 1999, i.e. the euro country areas
+    # set their inflation after 1999-01-31 equal to that of euro area
+    for country in df_subset.columns:
+        if df_subset[country].isna().all():
+            col_index = df.columns.get_loc(country)
+            df.iloc[rows:, col_index] =  df.iloc[rows:, euro_index]
+
+
     # rename columns
     df.columns = [col.split(":")[1] for col in df.columns]
     # Quarterly average
