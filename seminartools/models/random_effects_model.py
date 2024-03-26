@@ -119,11 +119,14 @@ class RandomEffectsModel(BaseModel):
 
         Takes into account that the data is grouped by country.
         """
-        for i in range(1, self.lags + 1):
-            for col in self.exogenous_columns + [self.target_column]:
-                data[f"{col}_lag_{i}"] = data.groupby(self.country_column)[col].shift(i)
+        def _add_lags(country_df):
+            for i in range(1, self.lags + 1):
+                for col in self.exogenous_columns + [self.target_column]:
+                    country_df[f"{col}_lag_{i}"] = country_df[col].shift(i, freq = pd.DateOffset(months=3))
 
-        return data
+            return country_df
+
+        return data.groupby(self.country_column, group_keys = False).apply(_add_lags)
 
     def predict(self, data: pd.DataFrame, pointwise_aggregation_method: str = "mean"):
         """
@@ -160,7 +163,6 @@ class RandomEffectsModel(BaseModel):
         predictions = predictions.loc[end_date:end_date]
 
         # add 3 months to prediction.get_level_values(0)
-        # predictions.index = predictions.index.set_levels(predictions.index.get_level_values(0) + pd.DateOffset(months=3), level=0)
         predictions.index = pd.MultiIndex.from_tuples(
             zip(
                 predictions.index.get_level_values(0) + pd.DateOffset(months=3),
