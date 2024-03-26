@@ -136,13 +136,36 @@ class RandomEffectsModel(BaseModel):
         data = data.dropna()
 
         # Predict using the model that was fit
-        predictions = self.model.predict(self.results, data = data, inplace = False)
+        predictions = self.model.predict(self.results, data=data, inplace=False)
 
         if pointwise_aggregation_method == "mean":
-            predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean("sample")
+            predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean(
+                "sample"
+            )
         else:
-            raise ValueError(f"Unknown pointwise aggregation method: {pointwise_aggregation_method}")
+            raise ValueError(
+                f"Unknown pointwise aggregation method: {pointwise_aggregation_method}"
+            )
 
         data["predictions"] = predictions
 
-        return data.reset_index().set_index([self.country_column, "date"])["predictions"].rename("inflation").to_frame()
+        predictions = (
+            data.reset_index()
+            .set_index(["date", self.country_column])["predictions"]
+            .rename("inflation")
+            .to_frame()
+        )
+        # only keep the predictions for the last date
+        end_date = predictions.index.get_level_values("date").max()
+        predictions = predictions.loc[end_date:end_date]
+
+        # add 3 months to prediction.get_level_values(0)
+        # predictions.index = predictions.index.set_levels(predictions.index.get_level_values(0) + pd.DateOffset(months=3), level=0)
+        predictions.index = pd.MultiIndex.from_tuples(
+            zip(
+                predictions.index.get_level_values(0) + pd.DateOffset(months=3),
+                predictions.index.get_level_values(1),
+            )
+        )
+
+        return predictions
