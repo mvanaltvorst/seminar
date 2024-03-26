@@ -21,7 +21,7 @@ def _get_inference_method_chains():
     """
     inference_method = "mcmc"
     chains = 4
-    num_draws = 500
+    num_draws = 1500
     
 
     #TODO: WHY DOES JAX GPU BACKEND NOT WORK???
@@ -55,7 +55,7 @@ class RandomEffectsModel(BaseModel):
             "commodity_iMETMIN",
             "commodity_iPRECIOUSMET",
         ],
-        tune: int = 100,
+        tune: int = 500,
     ):
         """
         Initializes the model.
@@ -72,7 +72,7 @@ class RandomEffectsModel(BaseModel):
         self.tune = tune
 
         # Build the formula to be used by Bambi
-        self.formula = f"{target_column} ~ "
+        self.formula = f"{target_column} ~ (1 | {country_column}) + "
 
         # Regress on lagged exogenous variables and lagged target variable
         lagged_exog_columns = [
@@ -80,7 +80,11 @@ class RandomEffectsModel(BaseModel):
             for i in range(1, lags + 1)
             for col in exogenous_columns + [target_column]
         ]
-        self.formula += " + ".join(lagged_exog_columns)
+        #self.formula += " + ".join(lagged_exog_columns)
+        for i, col in enumerate(lagged_exog_columns):
+            self.formula += f"(0 + {col} | {country_column})"
+            if i < len(lagged_exog_columns) - 1:
+                self.formula += " + "
 
     def fit(self, data: pd.DataFrame):
         """
