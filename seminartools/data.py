@@ -259,6 +259,100 @@ def read_gdp_growth(
     return df
 
 
+def read_gdp_level(
+    *,
+    filepath="./../../assets/real-GDP.xlsx",
+    sheet_name="level GDP",
+    header=5,
+    skipfooter=5,
+    add_median=False,
+    mergeable_format = False,
+    country_remaps = {
+        "China (People's Republic of)": "China"
+    }
+):
+    """
+    Reads GDP level data from the real-GDP.xlsx file and returns a dataframe.
+    
+    Parameters
+    ----------
+    filepath : str
+        Path to the excel file.
+    sheet_name : str
+        Name of the sheet in the excel file.
+    header : int
+        Index of the header of the table.
+    skipfooter : int
+        Number of rows to skip at the end of the table.
+    add_median : bool
+        If True, add a column with the median GDP growth rate across countries.
+    """
+
+    df_gdp = pd.read_excel(filepath, sheet_name= sheet_name,header= header,skipfooter= skipfooter)
+
+    #handle weird indent for last ten countries
+    df_gdp.iloc[-10:,0]   = df_gdp.iloc[-10:,1]
+
+    df_gdp.set_index('Period', inplace=True, drop=True)
+    df_gdp.drop(columns=['Unnamed: 1', 'Unnamed: 2', 'Unnamed: 3'], inplace=True)
+    
+    # Rename columns: only half of the columns are named the respective time period.
+    # We rename the columns to the time period of the previous column.
+    for i in range(int(len(df_gdp.columns) / 2)):
+        df_gdp.rename(
+            columns={
+                df_gdp.columns[2*i+1]: df_gdp.columns[2*i]
+            },
+            inplace=True
+    )
+
+
+    df_gdp = df_gdp.T
+    df_gdp.drop(columns=['Country'], inplace=True)
+
+    # Coerce non-numeric values to NaN
+    df_gdp = df_gdp.apply(pd.to_numeric, errors='coerce')
+
+    # Delete rows that are all NaN
+    df_gdp.dropna(how='all', inplace=True)
+
+    
+    # Change the index to datetime
+    def parse_quarter_string(q_string):
+        # Split the string into its components (e.g., "Q2-1947" -> ["Q2", "1947"])
+        quarter_part, year_part = q_string.split('-')
+        
+        # Extract the quarter number
+        quarter_number = int(quarter_part[1])  # Convert "2" to 2
+        
+        # Determine the month that corresponds to the quarter
+        month = (quarter_number - 1) * 3 + 1  # Quarter 1 starts in January, Quarter 2 in April, etc.
+        
+        # Create a datetime object for the first day of the starting month of the quarter
+        return pd.Timestamp(year=int(year_part), month=month, day=1)
+
+    # Apply the function to the index
+    df_gdp.index = df_gdp.index.map(parse_quarter_string)
+
+
+    if add_median:
+        # Add median column
+        df_gdp["median"] = df_gdp.median(axis=1)
+
+    if mergeable_format:
+        df_gdp = df_gdp.rename_axis("date")
+        df_gdp = df_gdp.stack().reset_index().rename(columns = {
+            "Period": "country",
+            0: "gdp_growth"
+        })
+        df_gdp = df_gdp.replace({"country": country_remaps})
+        df_gdp = df_gdp.set_index(["country", "date"])
+
+    return df_gdp
+
+
+
+
 # TODO: the time periods of this data are fucked up
 # (quarters don't align)
 def read_interest_rate(
