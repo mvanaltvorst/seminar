@@ -14,7 +14,7 @@ class FourQuarterAverageModel(BaseModel):
 
     def __init__(
         self,
-        country_column: str = "Country",
+        country_column: str = "country",
         inflation_column: str = "inflation",
     ):
         self.country_column = country_column
@@ -32,13 +32,15 @@ class FourQuarterAverageModel(BaseModel):
         """
         Predict the inflation rate for the next month.
         """
+
+        data = data.pivot(index='date', columns= self.country_column, values= self.inflation_column)
         # we split into countries
-        countries = data[self.country_column].unique()
+        countries = data.columns.unique()
         predictions = []
 
         for country in countries:
-            country_data = data[data[self.country_column] == country]
-            country_data = country_data.set_index("yearmonth")
+            country_data = data[country]
+            country_data=  country_data.to_frame(self.inflation_column)
 
             # get the last four quarters
             last_four = country_data[self.inflation_column].tail(4)
@@ -49,8 +51,8 @@ class FourQuarterAverageModel(BaseModel):
             prediction_index = last_four.index[-1] + pd.DateOffset(months=3)
 
             prediction = {
-                "yearmonth": prediction_index,
-                "Country": country,
+                "date": prediction_index,
+                "country": country,
                 "inflation": prediction,
             }
 
