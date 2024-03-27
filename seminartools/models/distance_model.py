@@ -25,6 +25,7 @@ class DistanceModel(BaseModel):
         ],
         tune: int = 500,
         distance_function: callable = geo_distance,
+        distance_scaling: float = 1000
     ):
         """
         Initializes the model.
@@ -44,6 +45,9 @@ class DistanceModel(BaseModel):
 
         # MCMC parameters
         self.tune = tune
+
+        # A scaling such that the matern covariance function is not too small
+        self.distance_scaling = distance_scaling
 
     def fit(self, data: pd.DataFrame):
         """
@@ -115,10 +119,12 @@ class DistanceModel(BaseModel):
             sigma = pm.HalfCauchy("sigma", beta=1)
 
             # New GP part
-            ls = pm.Gamma("ls", alpha=2, beta=1)  # Example length scale prior
+            ls = pm.Gamma("ls", alpha=2, beta=10000)  # Example length scale prior
             # cov_func = Matern32Chordal(ls=ls)
             cov_func = Matern32(2, ls)
-            cov_matrix = cov_func.full_from_distance(self.distance_matrix)
+            cov_matrix = cov_func.full_from_distance(self.distance_matrix / self.distance_scaling)
+            return cov_matrix
+            print(cov_matrix)
 
             latent = pm.gp.Latent(cov_func=cov_matrix)
 
