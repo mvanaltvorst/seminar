@@ -119,7 +119,6 @@ class ARMAXModel(BaseModel):
         # we split into countries
         countries = data[self.country_column].unique()
         predictions = []
-
         for country in countries:
             country_data = data[data[self.country_column] == country]
             country_data = country_data.set_index("yearmonth")
@@ -153,9 +152,12 @@ class ARMAXModel(BaseModel):
         ar_coefs = self.models[country].arparams
         ma_coefs = self.models[country].maparams
         const = self.models[country].params['const']
+        exog_coefs = self.models[country].params[self.exogenous_columns]
 
         adjusted_series = (data[self.inflation_column] - const).to_numpy()
         epsilons = np.zeros(len(adjusted_series))
+        exogSeries = data[self.exogenous_columns].to_numpy()
+
         for i in range(max(len(ar_coefs), len(ma_coefs)), len(adjusted_series)):
             forecast = 0
             for j in range(len(ar_coefs)):
@@ -163,6 +165,10 @@ class ARMAXModel(BaseModel):
 
             for j in range(len(ma_coefs)):
                 forecast += ma_coefs[j] * epsilons[i - j - 1]
+
+            for j in range(len(self.exogenous_columns)):
+                exogData = exogSeries[:,j]
+                forecast += exog_coefs[j] * exogData[i-1]
 
             epsilons[i] = adjusted_series[i] - forecast
         
@@ -172,6 +178,11 @@ class ARMAXModel(BaseModel):
         
         for i in range(len(ma_coefs)):
             forecast += ma_coefs[i] * epsilons[-i - 1]
+
+        for i in range(len(self.exogenous_columns)):
+            coef = exog_coefs[self.exogenous_columns[i]]
+            exog_data = exogSeries[:,i]
+            forecast += coef * exog_data[-1]
 
         pd.Series(epsilons).plot()
 
