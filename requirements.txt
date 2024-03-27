@@ -3,3 +3,4 @@ numpy
 statsmodels
 matplotlib
 bambi
+pycountry
