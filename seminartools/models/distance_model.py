@@ -4,7 +4,7 @@ from .base_model import BaseModel
 from seminartools.utils import geo_distance
 import arviz as az
 import pymc as pm
-from pymc.gp.cov import Matern32
+from seminartools.matern_kernel import MaternGeospatial
 
 
 class DistanceModel(BaseModel):
@@ -25,7 +25,7 @@ class DistanceModel(BaseModel):
         ],
         tune: int = 500,
         distance_function: callable = geo_distance,
-        distance_scaling: float = 1000
+        distance_scaling: float = 1000,
     ):
         """
         Initializes the model.
@@ -68,8 +68,6 @@ class DistanceModel(BaseModel):
         assert all(
             [col in data.columns for col in self.exogenous_columns]
         ), f"Exogenous columns not in data."
-
-        self.distance_matrix = self._geographical_distance_matrix(self.countries)
 
         # Create lagged variables
         data = self._create_lagged_variables(data)
@@ -120,13 +118,14 @@ class DistanceModel(BaseModel):
 
             # New GP part
             ls = pm.Gamma("ls", alpha=2, beta=10000)  # Example length scale prior
-            # cov_func = Matern32Chordal(ls=ls)
-            cov_func = Matern32(2, ls)
-            cov_matrix = cov_func.full_from_distance(self.distance_matrix / self.distance_scaling)
-            return cov_matrix
-            print(cov_matrix)
+            cov_func = MaternGeospatial(
+                2,
+                ls,
+                distance_scaling=self.distance_scaling,
+                distance_function=self.distance_function,
+            )
 
-            latent = pm.gp.Latent(cov_func=cov_matrix)
+            latent = pm.gp.Latent(cov_func=cov_func)
 
             country_correlated_noise = latent.prior(
                 "country_correlated_noise", dims="country", X=self.countries
@@ -159,20 +158,6 @@ class DistanceModel(BaseModel):
             return country_df
 
         return data.groupby(self.country_column, group_keys=False).apply(_add_lags)
-
-    def _geographical_distance_matrix(self, countries):
-        """
-        Create a matrix of geographical distances between countries based on their coordinates.
-        """
-        distance_matrix = np.zeros((len(countries), len(countries)))
-
-        for i, country_i in enumerate(countries):
-            for j, country_j in enumerate(countries):
-                if i == j:
-                    distance_matrix[i, j] = 0
-                else:
-                    distance_matrix[i, j] = self.distance_function(country_i, country_j)
-        return distance_matrix
 
     def predict(self, data: pd.DataFrame, pointwise_aggregation_method: str = "mean"):
         """

@@ -64,7 +64,7 @@ def gdp(country: str, year: int, quarter: int) -> float:
     return GDP_LEVEL_DF.loc[time, country]
 
 
-def gravityTradeDistance(
+def gravity_trade_distance(
     countryA: str, countryB: str, year: int, quarter: int
 ) -> float:
     """
@@ -87,7 +87,7 @@ def gravityTradeDistance(
     return GDP_A * GDP_B / dist
 
 
-def proposalDistance(countryA: str, countryB: str, year: int, quarter: int) -> float:
+def proposal_distance(countryA: str, countryB: str, year: int, quarter: int) -> float:
     """
     Calculate a proposed distance metric between two countries, incorporating economic and geographical factors.
 
