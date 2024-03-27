@@ -5,6 +5,8 @@ from seminartools.utils import geo_distance
 import arviz as az
 import pymc as pm
 from seminartools.matern_kernel import MaternGeospatial
+import pytensor
+
 
 
 class DistanceModel(BaseModel):
@@ -24,6 +26,8 @@ class DistanceModel(BaseModel):
             "commodity_iPRECIOUSMET",
         ],
         tune: int = 500,
+        draws: int = 1500,
+        chains: int = 4,
         distance_function: callable = geo_distance,
         distance_scaling: float = 1000,
     ):
@@ -45,6 +49,8 @@ class DistanceModel(BaseModel):
 
         # MCMC parameters
         self.tune = tune
+        self.draws = draws
+        self.chains = chains
 
         # A scaling such that the matern covariance function is not too small
         self.distance_scaling = distance_scaling
@@ -78,26 +84,14 @@ class DistanceModel(BaseModel):
         with pm.Model(
             coords={
                 "country": self.countries,
+                "countrytime": data.index,
                 "exogenous": self.exogenous_columns,
                 "target": [self.target_column],
             }
         ) as self.model:
-            constant_mean_tau = pm.Gamma("constant_mean_tau", alpha=1, beta=1)
-            constant_mean = pm.Normal("constant_mean", mu=0, tau=constant_mean_tau)
-
             country_mean_tau = pm.Gamma("country_mean_tau", alpha=1, beta=1)
             country_means = pm.Normal(
-                "country_means", mu=constant_mean, tau=country_mean_tau, dims="country"
-            )
-
-            regression_coefficient_mean_tau = pm.Gamma(
-                "regression_coefficient_mean_tau", alpha=1, beta=1
-            )
-            regression_coefficient_mean = pm.Normal(
-                "regression_coefficient_mean",
-                mu=0,
-                tau=regression_coefficient_mean_tau,
-                dims="exogenous",
+                "country_means", mu=0, tau=country_mean_tau, dims="country"
             )
 
             regression_coefficient_tau = pm.Gamma(
@@ -105,16 +99,16 @@ class DistanceModel(BaseModel):
             )
             regression_coefficients = pm.Normal(
                 "regression_coefficients",
-                mu=regression_coefficient_mean,
+                mu=0,
                 tau=regression_coefficient_tau,
-                dims=["exogenous", "target"],
+                dims=["exogenous", "country"],
             )
-
-            # Likelihood
-            mu = country_means + pm.math.dot(
-                data[self.exogenous_columns].values, regression_coefficients
+            # Index of the country in the countries array
+            # Allows us to select the correct column
+            # from the regression coefficients.
+            country_index_vector = (
+                np.array([np.where(self.countries == country)[0][0] for country in data[self.country_column]])
             )
-            sigma = pm.HalfCauchy("sigma", beta=1)
 
             # New GP part
             ls = pm.Gamma("ls", alpha=2, beta=10000)  # Example length scale prior
@@ -133,13 +127,27 @@ class DistanceModel(BaseModel):
 
             # Incorporate the GP into your model's likelihood
             sigma = pm.HalfCauchy("sigma", beta=1)
+            # Likelihood
+            # mu = country_means + pm.math.dot(
+            #     data[self.exogenous_columns].values, regression_coefficients
+            # ) + country_correlated_noise
+            # mu = pm.math.dot(
+            #     data[self.exogenous_columns].values, regression_coefficients[:, country_index_vector]
+            # )
+
+
+            mu = (data[self.exogenous_columns].values * regression_coefficients[:, country_index_vector].T).sum(axis=1)
+
             y_obs = pm.Normal(
                 "likelihood",
-                mu=mu + country_correlated_noise,
+                mu=mu,
                 sigma=sigma,
                 observed=data[self.target_column].values,
-                dims="country",
+                dims="countrytime",
             )
+
+            self.trace = pm.sample(tune=self.tune, draws=self.draws, chains=self.chains, cores=self.chains)
+
 
     def _create_lagged_variables(self, data: pd.DataFrame):
         """

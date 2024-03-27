@@ -5,6 +5,8 @@ import pycountry as pyc
 from .data import read_gdp_level
 
 
+# We cache the distance matrix
+# because it makes the geo_distance method quicker
 DF_DISTANCE_FILEPATH = "./../../assets/dist_cepii.xls"
 DF_DISTANCE = pd.read_excel(DF_DISTANCE_FILEPATH)
 
