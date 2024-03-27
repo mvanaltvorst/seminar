@@ -24,7 +24,7 @@ class VARModel(BaseModel):
         self,
         country_column: str = "Country",
         date_column: str = "yearmonth",
-        inflation_column: str = "inflation",
+        inflation_column: list[str] = ["inflation"],
         country_exogenous_columns: list[str] = [],
         global_exogenous_columns: list[str] = [],
         lags: list[int] = [1, 2, 3, 4],
@@ -41,6 +41,7 @@ class VARModel(BaseModel):
         self.country_exog_lags = country_exog_lags
         self.global_exog_lags = global_exog_lags
         self.long_format = long_format
+
 
         self.models = {}
 
@@ -65,9 +66,15 @@ class VARModel(BaseModel):
             data_wide_global_exog.columns = data_wide_global_exog.columns.map('_'.join)
             data_wide_global_exog.columns = self.global_exogenous_columns
         else:
-            data_wide = data
-            # This line needs work - not clear yet how to deal with non-long format exogenous variables
+            data_wide = data[self.inflation_column]
+            data_wide_country_exog = data[self.country_exogenous_columns]
+            data_wide_global_exog = data[self.global_exogenous_columns]
 
+        # data_wide = data_wide.fillna(0)
+        # data_wide_country_exog = data_wide_country_exog.fillna(0)
+        # data_wide_global_exog = data_wide_global_exog.fillna(0)
+
+        
         # Need to store the columns of the wide data for during prediction
         self.data_wide_columns = data_wide.columns
 
@@ -134,11 +141,25 @@ class VARModel(BaseModel):
         """
         Predict the inflation rate for the next month.
         """
+        
         if self.long_format:
-            data_wide = data.pivot(index="yearmonth", columns="Country", values="inflation")
-            data_wide = data_wide[self.data_wide_columns]
+            data_wide = data.pivot(index=self.date_column, columns=self.country_column, values=self.inflation_column)
+            data_wide_country_exog = data.pivot(index=self.date_column, columns=self.country_column, values=self.country_exogenous_columns)
+            data_wide_country_exog.columns = data_wide_country_exog.columns.map('_'.join)
+            data_wide_global_exog = data.pivot(index=self.date_column, columns=self.country_column, values=self.global_exogenous_columns)
+            top_level_indices = data_wide_global_exog.columns.get_level_values(0).unique() # Global exogenous variables are the same for all countries, so we can just take one column
+            columns_to_keep = []
+            for top_index in top_level_indices:
+                sub_columns = data_wide_global_exog[top_index].columns
+                if len(sub_columns) > 0:
+                    columns_to_keep.append((top_index, sub_columns[0]))
+            data_wide_global_exog = data_wide_global_exog.loc[:, columns_to_keep]
+            data_wide_global_exog.columns = data_wide_global_exog.columns.map('_'.join)
+            data_wide_global_exog.columns = self.global_exogenous_columns
         else:
-            data_wide = data
+            data_wide = data[self.inflation_column]
+            data_wide_country_exog = data[self.country_exogenous_columns]
+            data_wide_global_exog = data[self.global_exogenous_columns]
 
         predictions = {}
         for col in data_wide.columns:
@@ -216,9 +237,9 @@ class VARModel(BaseModel):
         # Convert the predictions back to long format
         if self.long_format:
             predictions = predictions.stack().reset_index()
-            predictions.columns = ["yearmonth", "Country", "inflation"]
+            predictions.columns = [self.date_column, "Country", "inflation"]
             # The predictions are one quarter ahead
-            predictions["yearmonth"] += pd.DateOffset(months=3)
+            predictions[self.date_column] += pd.DateOffset(months=3)
         else:
             predictions.index += pd.DateOffset(months=3)
 

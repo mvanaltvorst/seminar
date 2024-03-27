@@ -31,7 +31,7 @@ Please set h to 1 or use a different model.
     predictions = []
     while True:
         forecast_time = current_time
-        auxiliary_df = data[data["yearmonth"] < forecast_time].copy()
+        auxiliary_df = data[data["date"] < forecast_time].copy()
         for i in range(h):
             preds = model.predict(auxiliary_df)
 
@@ -43,7 +43,7 @@ Please set h to 1 or use a different model.
         predictions.append(preds)
 
         # We stop making forecasts if we have reached the end of the data
-        if current_time + pd.DateOffset(months=3 * h) > data.iloc[-1]["yearmonth"]:
+        if current_time + pd.DateOffset(months=3 * h) > data.iloc[-1]["date"]:
             break
 
         current_time += pd.DateOffset(months=3)
