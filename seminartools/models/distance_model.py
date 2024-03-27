@@ -6,6 +6,7 @@ import arviz as az
 import pymc as pm
 from seminartools.matern_kernel import MaternGeospatial
 import pytensor
+from tqdm import tqdm
 
 
 
@@ -81,10 +82,12 @@ class DistanceModel(BaseModel):
         # Drop rows with NaNs due to lagged variables
         data = data.dropna()
 
+        self.times = data.index.unique().sort_values()
+
         with pm.Model(
             coords={
                 "country": self.countries,
-                "countrytime": data.index,
+                "time": self.times,
                 "exogenous": self.exogenous_columns,
                 "target": [self.target_column],
             }
@@ -103,15 +106,21 @@ class DistanceModel(BaseModel):
                 tau=regression_coefficient_tau,
                 dims=["exogenous", "country"],
             )
+
             # Index of the country in the countries array
             # Allows us to select the correct column
             # from the regression coefficients.
             country_index_vector = (
                 np.array([np.where(self.countries == country)[0][0] for country in data[self.country_column]])
             )
+            time_index_vector = (
+                np.array([np.where(self.times == time)[0][0] for time in data.index])
+            )
+
+            total_coordinates = np.array([(time, country) for time in self.times for country in self.countries])
 
             # New GP part
-            ls = pm.Gamma("ls", alpha=2, beta=10000)  # Example length scale prior
+            ls = pm.Gamma("ls", alpha=2, beta=1)  # Example length scale prior
             cov_func = MaternGeospatial(
                 2,
                 ls,
@@ -120,23 +129,31 @@ class DistanceModel(BaseModel):
             )
 
             latent = pm.gp.Latent(cov_func=cov_func)
+            country_time_noises = []
+            for time in tqdm(self.times):
+                gp_noise = latent.prior(f"gp_noise_{time}", X=self.countries)
+                # Indexing to assign the generated noise to the correct positions
+                country_time_noises.append(gp_noise)
 
-            country_correlated_noise = latent.prior(
-                "country_correlated_noise", dims="country", X=self.countries
-            )
+            country_time_noise = pytensor.stack(country_time_noises)
 
-            # Incorporate the GP into your model's likelihood
+
+            print(f"{country_time_noise.eval().shape=}")
+
+            # Incorporate the GP into the model's likelihood
             sigma = pm.HalfCauchy("sigma", beta=1)
-            # Likelihood
-            # mu = country_means + pm.math.dot(
-            #     data[self.exogenous_columns].values, regression_coefficients
-            # ) + country_correlated_noise
-            # mu = pm.math.dot(
-            #     data[self.exogenous_columns].values, regression_coefficients[:, country_index_vector]
-            # )
-
-
+            
+            # We calculate y_t = X_t' beta_{country(t)}
+            # in a vectorized way by doing elementwise
+            # multiplication of the exogenous variables
+            # with the indexed regression coefficients
+            # and summing over the columns.
             mu = (data[self.exogenous_columns].values * regression_coefficients[:, country_index_vector].T).sum(axis=1)
+            # Then we add the constant per country
+            mu += country_means[country_index_vector]
+            # And the correlated noise
+            # TODO: different correlated noise every time period
+            mu += country_correlated_noise[time_index_vector, country_index_vector]
 
             y_obs = pm.Normal(
                 "likelihood",
