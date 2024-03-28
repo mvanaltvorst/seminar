@@ -34,7 +34,7 @@ class UCSVSSModel(BaseModel):
 
     def __init__(self, num_particles: int, stochastic_seasonality: bool):
         self.num_particles = num_particles
-        self.country_column = "Country"
+        self.country_column = "country"
 
         self.gamma = GAMMA
 
@@ -70,8 +70,8 @@ class UCSVSSModel(BaseModel):
         """
         # dfs = data.groupby("Country").apply(self._run_pf)
         dfs = Parallel(n_jobs=N_CORES)(
-            delayed(self._run_pf)(data.loc[data["Country"] == country])
-            for country in tqdm(data["Country"].unique())
+            delayed(self._run_pf)(data.loc[data["country"] == country])
+            for country in tqdm(data["country"].unique())
         )
         self.stored_state_means = pd.concat(dfs, axis=0)
 
@@ -117,7 +117,7 @@ class UCSVSSModel(BaseModel):
 
         # Seasonality indicator function
         # first we determine which modulo corresponds to Q1
-        t0_season = (data["yearmonth"].iloc[0].month - 1) // 3
+        t0_season = (data["date"].iloc[0].month - 1) // 3
 
         def seas(i, t):
             """
@@ -188,7 +188,7 @@ class UCSVSSModel(BaseModel):
             )
             if np.sum(W[t, :]) == 0:
                 print("WARNING: All weights are zero. Resampling will fail.")
-                print("(country: {})".format(data["Country"].iloc[0]))
+                print("(country: {})".format(data["country"].iloc[0]))
                 print(f"(t = {t})")
             W[t, :] = W[t, :] / np.sum(W[t, :])
 
@@ -200,7 +200,7 @@ class UCSVSSModel(BaseModel):
 
         out = pd.DataFrame(
             {
-                "yearmonth": data["yearmonth"].values,
+                "date": data["date"].values,
                 "etau": X[1:, :, 0].mean(axis=1) / 100,  # convert back to percentage
                 "etauplusdeltas": etauplusdeltas,  # TODO
                 "elnsetasq": X[1:, :, 1].mean(axis=1),  # OTHER SCALE!
@@ -216,9 +216,9 @@ class UCSVSSModel(BaseModel):
             }
         )
 
-        out["Country"] = data["Country"].iloc[0]
+        out["country"] = data["country"].iloc[0]
 
-        return out.set_index(["Country", "yearmonth"])
+        return out.set_index(["country", "date"])
 
     def predict(self, data: pd.DataFrame) -> pd.Series:
         """
@@ -234,8 +234,8 @@ class UCSVSSModel(BaseModel):
 
         return pd.DataFrame(
             [
-                self._predict(data.loc[data["Country"] == country])
-                for country in data["Country"].unique()
+                self._predict(data.loc[data["country"] == country])
+                for country in data["country"].unique()
             ]
         )
 
@@ -245,14 +245,14 @@ class UCSVSSModel(BaseModel):
         """
         # We have to find the state corresponding to the last row of data
         row = self.stored_state_means.loc[
-            data["Country"].iloc[-1], data["yearmonth"].iloc[-1]
+            data["country"].iloc[-1], data["date"].iloc[-1]
         ]
         tau_tminus1 = row["etau"]
         delta_tminus1 = row[["edelta1", "edelta2", "edelta3", "edelta4"]]
 
         # Seasonality indicator function
         # first we determine which modulo corresponds to Q1
-        t0_season = (data["yearmonth"].iloc[0].month - 1) // 3
+        t0_season = (data["date"].iloc[0].month - 1) // 3
 
         def seas(i, t):
             """
@@ -274,6 +274,6 @@ class UCSVSSModel(BaseModel):
                 + delta_tminus1["edelta3"] * seas(2, tplus1)
                 + delta_tminus1["edelta4"] * seas(3, tplus1)
             ),
-            "Country": data["Country"].iloc[0],
-            "yearmonth": data["yearmonth"].iloc[-1] + pd.DateOffset(months=3),
+            "country": data["country"].iloc[0],
+            "date": data["date"].iloc[-1] + pd.DateOffset(months=3),
         }
