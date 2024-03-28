@@ -5,7 +5,6 @@ from seminartools.utils import geo_distance
 import arviz as az
 import pymc as pm
 from seminartools.matern_kernel import MaternGeospatial
-import pytensor
 from tqdm import tqdm
 
 
@@ -90,22 +89,23 @@ class DistanceModel(BaseModel):
                 "time": self.times,
                 "exogenous": self.exogenous_columns,
                 "target": [self.target_column],
+                "countrytime": data.index,
             }
         ) as self.model:
-            country_mean_tau = pm.Gamma("country_mean_tau", alpha=1, beta=1)
-            country_means = pm.Normal(
-                "country_means", mu=0, tau=country_mean_tau, dims="country"
-            )
+            # country_mean_tau = pm.Gamma("country_mean_tau", alpha=1, beta=1)
+            # country_means = pm.Normal(
+            #     "country_means", mu=0, tau=country_mean_tau, dims="country"
+            # )
 
-            regression_coefficient_tau = pm.Gamma(
-                "regression_coefficient_tau", alpha=1, beta=1
-            )
-            regression_coefficients = pm.Normal(
-                "regression_coefficients",
-                mu=0,
-                tau=regression_coefficient_tau,
-                dims=["exogenous", "country"],
-            )
+            # regression_coefficient_tau = pm.Gamma(
+            #     "regression_coefficient_tau", alpha=1, beta=1
+            # )
+            # regression_coefficients = pm.Normal(
+            #     "regression_coefficients",
+            #     mu=0,
+            #     tau=regression_coefficient_tau,
+            #     dims=["exogenous", "country"],
+            # )
 
             # Index of the country in the countries array
             # Allows us to select the correct column
@@ -128,17 +128,28 @@ class DistanceModel(BaseModel):
                 distance_function=self.distance_function,
             )
 
+            # country_time_noises = []
+            # for time in tqdm(self.times):
+            #     gp_noise = latent.prior(f"gp_noise_{time}", X=self.countries)
+            #     # Indexing to assign the generated noise to the correct positions
+            #     country_time_noises.append(gp_noise)
+
+            # country_time_noise = pytensor.stack(country_time_noises)
+            # print(f"{country_time_noise.eval().shape=}")
+
             latent = pm.gp.Latent(cov_func=cov_func)
-            country_time_noises = []
-            for time in tqdm(self.times):
-                gp_noise = latent.prior(f"gp_noise_{time}", X=self.countries)
-                # Indexing to assign the generated noise to the correct positions
-                country_time_noises.append(gp_noise)
 
-            country_time_noise = pytensor.stack(country_time_noises)
+            # dim: num_countries 
+            country_means = latent.prior("intercepts", X=self.countries)
 
+            regression_coefficients = []
+            for exog in tqdm(self.exogenous_columns, desc = "Creating regression coefficients"):
+                regression_coefficients.append(
+                    latent.prior(f"regression_coefficients_{exog}", X=self.countries)
+                )
 
-            print(f"{country_time_noise.eval().shape=}")
+            # dim: num_regression_coefficients x num_countries
+            regression_coefficients = pm.math.stack(regression_coefficients)
 
             # Incorporate the GP into the model's likelihood
             sigma = pm.HalfCauchy("sigma", beta=1)
@@ -151,9 +162,6 @@ class DistanceModel(BaseModel):
             mu = (data[self.exogenous_columns].values * regression_coefficients[:, country_index_vector].T).sum(axis=1)
             # Then we add the constant per country
             mu += country_means[country_index_vector]
-            # And the correlated noise
-            # TODO: different correlated noise every time period
-            mu += country_correlated_noise[time_index_vector, country_index_vector]
 
             y_obs = pm.Normal(
                 "likelihood",
@@ -193,6 +201,20 @@ class DistanceModel(BaseModel):
 
         data = self._create_lagged_variables(data)
         data = data.dropna()
+
+        country_index_vector = (
+            np.array([np.where(self.countries == country)[0][0] for country in data[self.country_column]])
+        )
+
+        with self.model:
+            pm.set_data(
+                {
+                    "country": country_index_vector,
+                    "time": np.array([np.where(self.times == time)[0][0] for time in data.index]),
+                    "exogenous": np.array([np.where(self.exogenous_columns == exog)[0][0] for exog in self.exogenous_columns]),
+                }
+            )
+    
 
         # # Predict using the model that was fit
         # predictions = self.model.predict(self.results, data=data, inplace=False)
