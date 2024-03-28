@@ -4,41 +4,6 @@ import bambi as bmb
 from .base_model import BaseModel
 import arviz as az
 
-
-def _get_inference_method_chains():
-    """
-    Bambi is quicker with nuts_blackjax if you have a NVIDIA GPU.
-
-    If not, mcmc is the default inference method which is slower but still
-    the best option for CPU.
-
-    This method returns the best possible inference method on a given machine.
-
-    Returns
-    -------
-    str
-        Inference method to use.
-    """
-    inference_method = "mcmc"
-    chains = 4
-    num_draws = 1500
-    
-
-    #TODO: WHY DOES JAX GPU BACKEND NOT WORK???
-    # try:
-    #     import jax
-
-    #     if jax.device_count() > 0:
-    #         inference_method = "nuts_blackjax"
-    #         chains = 1  # NUTS is not parallelizable
-    #         num_draws = 25000
-    #         print("GPU!!!")
-    # except ImportError:
-    #     pass
-
-    return inference_method, chains, num_draws
-
-
 class RandomEffectsModel(BaseModel):
     def __init__(
         self,
@@ -56,6 +21,9 @@ class RandomEffectsModel(BaseModel):
             "commodity_iPRECIOUSMET",
         ],
         tune: int = 500,
+        chains: int = 4,
+        num_draws: int = 1500,
+        nuts_sampler: str = "nutpie", # ❤️ nutpie
     ):
         """
         Initializes the model.
@@ -64,12 +32,12 @@ class RandomEffectsModel(BaseModel):
         self.country_column = country_column
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
-        self.inference_method, self.chains, self.num_draws = (
-            _get_inference_method_chains()
-        )
 
         # MCMC parameters
         self.tune = tune
+        self.chains = chains
+        self.num_draws = num_draws
+        self.nuts_sampler = nuts_sampler
 
         # Build the formula to be used by Bambi
         self.formula = f"{target_column} ~ (1 | {country_column}) + "
@@ -116,11 +84,11 @@ class RandomEffectsModel(BaseModel):
         # Fit the model
         self.model = bmb.Model(self.formula, data=data)
         self.results = self.model.fit(
-            inference_method=self.inference_method,
             draws=self.num_draws,
             tune=self.tune,
             chains=self.chains,
             cores=self.chains,
+            nuts_sampler=self.nuts_sampler,
         )
 
     def _create_lagged_variables(self, data: pd.DataFrame):
