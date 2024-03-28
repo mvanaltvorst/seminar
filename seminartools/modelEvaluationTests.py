@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from scipy.integrate import quad
 from seminartools.models.base_model import BaseModel
+from scipy.stats import ecdf
 
 def getMSPE(data : pd.Dataframe):
     """
@@ -15,12 +16,13 @@ def getMSPE(data : pd.Dataframe):
     return MSPE
 
 #in progress, depends on type of density forecasts we will produce
-def getUpsideEntropy(modelDensity : BaseModel, unconditionalDensity : BaseModel):
+def getUpsideEntropy(modelDensity : BaseModel, actual : pd.DataFrame):
+    unconditionalCDF = ecdf(actual)
+    unconditionalDensity = 
     diff = (np.log(unconditionalDensity) - np.log(modelDensity))
     internalFunction = diff*modelDensity
-    
-    
 
     median = modelDensity.median
     integral = quad(internalFunction,-np.inf, median)
+
 

@@ -4,6 +4,7 @@ from .base_model import BaseModel
 import pandas as pd
 from joblib import Parallel, delayed
 from tqdm import tqdm
+from scipy.stats import ecdf
 
 # num cpu
 from multiprocessing import cpu_count
@@ -35,7 +36,7 @@ class UCSVSSModel(BaseModel):
     def __init__(self, num_particles: int, stochastic_seasonality: bool):
         self.num_particles = num_particles
         self.country_column = "country"
-
+        self.aggregation_method = None
         self.gamma = GAMMA
 
         # No stochastic seasonality is equivalent to theta = 0
@@ -64,10 +65,12 @@ class UCSVSSModel(BaseModel):
         """
         pass
 
-    def run_pf(self, data: pd.DataFrame):
+    def run_pf(self, data: pd.DataFrame, aggregation_method : str = "median"):
         """
         Run the particle filter on the data of a single country.
         """
+        self.aggregation_method = aggregation_method
+
         # dfs = data.groupby("Country").apply(self._run_pf)
         dfs = Parallel(n_jobs=N_CORES)(
             delayed(self._run_pf)(data.loc[data["country"] == country])
@@ -198,7 +201,7 @@ class UCSVSSModel(BaseModel):
             )
             X[t, :, :] = X[t, indices, :]
 
-        out = pd.DataFrame(
+        """out = pd.DataFrame(
             {
                 "date": data["date"].values,
                 "etau": X[1:, :, 0].mean(axis=1) / 100,  # convert back to percentage
@@ -214,8 +217,49 @@ class UCSVSSModel(BaseModel):
                 "meff": 1 / np.sum(W[1:, :] ** 2, axis=1),
                 "inflation": data["inflation"].values,
             }
-        )
+        )"""
 
+        if self.aggregation_method == "median":
+            out = pd.DataFrame(
+                {
+                    "date": data["date"].values,
+                    "etau": np.median(X[1:, :, 0],axis=1) / 100,  # convert back to percentage
+                    "etauplusdeltas": etauplusdeltas,  # TODO
+                    "elnsetasq": np.median(X[1:, :, 1],axis=1),  # OTHER SCALE!
+                    "esigmaeta": np.median(np.sqrt(np.exp(X[1:, :, 1])),axis=1),
+                    "elnsepsilonsq": np.median(X[1:, :, 2],axis=1),
+                    "esigmaepsilon": np.median(np.sqrt(np.exp(X[1:, :, 2])),axis=1),
+                    "edelta1": np.median(X[1:, :, 3],axis=1) / 100,
+                    "edelta2": np.median(X[1:, :, 4],axis=1) / 100,
+                    "edelta3": np.median(X[1:, :, 5],axis=1) / 100,
+                    "edelta4": np.median(X[1:, :, 6],axis=1) / 100,
+                    "meff": 1 / np.sum(W[1:, :] ** 2, axis=1),
+                    "inflation": data["inflation"].values,
+                }
+            )
+        elif self.aggregation_method == "distribution":
+            def getECDFRow(row):
+                return ecdf(row).cdf
+            print(np.apply_along_axis(getECDFRow, axis=1,arr=(X[1:, :, 0] / 100)))
+            out = pd.DataFrame(
+                {
+                    "date": data["date"].values,
+                    "etau": np.apply_along_axis(getECDFRow, axis=1,arr=(X[1:, :, 0] / 100)),  # convert back to percentage
+                    "etauplusdeltas": etauplusdeltas,  # TODO
+                    "elnsetasq": np.apply_along_axis(getECDFRow, axis = 1, arr=X[1:, :, 1]),  # OTHER SCALE!
+                    "esigmaeta": np.apply_along_axis(getECDFRow,axis=1,arr=np.sqrt(np.exp(X[1:, :, 1]))),
+                    "elnsepsilonsq": np.apply_along_axis(getECDFRow, axis = 1,arr=X[1:, :, 2]),
+                    "esigmaepsilon": np.apply_along_axis(getECDFRow, axis = 1, arr=np.sqrt(np.exp(X[1:, :, 2]))),
+                    "edelta1": np.apply_along_axis(getECDFRow, axis = 1, arr = (X[1:, :, 3] / 100)),
+                    "edelta2": np.apply_along_axis(getECDFRow, axis = 1, arr = (X[1:, :, 4] / 100)),
+                    "edelta3": np.apply_along_axis(getECDFRow, axis = 1, arr= (X[1:, :, 5] / 100)),
+                    "edelta4": np.apply_along_axis(getECDFRow, axis = 1, arr= (X[1:, :, 6] / 100)),
+                    "meff": 1 / np.sum(W[1:, :] ** 2, axis=1),
+                    "inflation": data["inflation"].values,
+                }
+            )
+        print(self.aggregation_method)
+        print(out)
         out["country"] = data["country"].iloc[0]
 
         return out.set_index(["country", "date"])
