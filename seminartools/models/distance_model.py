@@ -171,6 +171,77 @@ class DistanceModel(BaseModel):
 
         return data.groupby(self.country_column, group_keys=False).apply(_add_lags)
 
+    # def predict(self, data: pd.DataFrame, aggregation_method: str = "mean"):
+    #     """
+    #     Predicts the target variable on data.
+    #     """
+    #     # Get country out of the multiindex
+    #     data = data.reset_index(level=self.country_column)
+
+    #     data = self._create_lagged_variables(data)
+    #     data = data.dropna()
+
+    #     # Map countries to their indices in the model
+    #     country_to_index = {country: idx for idx, country in enumerate(self.countries)}
+
+    #     # Prepare a container for the predictions from all samples
+    #     all_predictions = []
+
+    #     # Number of samples in the trace
+    #     num_samples = len(self.trace.posterior["intercepts"].values[0])
+
+    #     all_country_intercepts = self.trace.posterior["intercepts"].values[0]
+    #     all_regression_coefficients = {
+    #         exog: self.trace.posterior[f"regression_coefficients_{exog}"].values[0]
+    #         for exog in self.exogenous_columns
+    #     }
+
+    #     # Iterate over each sample
+    #     for sample in range(num_samples):
+    #         # Extract the intercepts and coefficients for this sample
+    #         country_intercepts = all_country_intercepts[sample, :]
+    #         regression_coefficients = {
+    #             exog: all_regression_coefficients[exog][sample]
+    #             for exog in self.exogenous_columns
+    #         }
+
+    #         # Calculate predictions for all final rows in data
+    #         for _, row in data[data.index == data.index.max()].iterrows():
+    #             country_idx = country_to_index[row[self.country_column]]
+    #             intercept = country_intercepts[country_idx]
+
+    #             # Calculate the contribution from each exogenous variable for this sample
+    #             exog_contribution = sum(
+    #                 row[exog] * regression_coefficients[exog][country_idx]
+    #                 for exog in self.exogenous_columns
+    #             )
+
+    #             # The prediction for this row and sample
+    #             prediction = intercept + exog_contribution
+    #             all_predictions.append(
+    #                 {"country": row[self.country_column], "prediction": prediction}
+    #             )
+
+    #     # Convert the list of lists into a 2D numpy array for easier manipulation
+    #     all_predictions = pd.DataFrame(all_predictions)
+
+    #     # Aggregate predictions across samples
+    #     if aggregation_method == "mean":
+    #         aggregated_predictions = all_predictions.groupby("country").mean()
+    #     elif aggregation_method == "median":
+    #         aggregated_predictions = all_predictions.groupby("country").median()
+    #     else:
+    #         raise ValueError(f"Unsupported aggregation method: {aggregation_method}")
+
+    #     # Create a DataFrame for the aggregated predictions
+    #     predictions_df = aggregated_predictions.rename(
+    #         columns={"prediction": "inflation"}
+    #     ).reset_index()
+    #     predictions_df["date"] = data.index.max() + pd.DateOffset(months=3)
+    #     predictions_df = predictions_df.set_index(["date", "country"])
+
+    #     return predictions_df
+
     def predict(self, data: pd.DataFrame, aggregation_method: str = "mean"):
         """
         Predicts the target variable on data, vectorized for improved performance.
