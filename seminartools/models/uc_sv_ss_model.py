@@ -5,6 +5,7 @@ import pandas as pd
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from scipy.stats import ecdf
+from scipy.stats import gaussian_kde
 
 # num cpu
 from multiprocessing import cpu_count
@@ -239,7 +240,14 @@ class UCSVSSModel(BaseModel):
             )
         elif self.aggregation_method == "distribution":
             def getECDFRow(row):
-                return ecdf(row).cdf
+                cdf = ecdf(row).cdf
+                kernelDensity = gaussian_kde(cdf)
+                range = np.linspace(min(cdf), max(cdf), 1000)
+                pdf = gaussian_kde(range)
+                #return ecdf(row).cdf
+                return pdf
+
+
             print(np.apply_along_axis(getECDFRow, axis=1,arr=(X[1:, :, 0] / 100)))
             out = pd.DataFrame(
                 {
