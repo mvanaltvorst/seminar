@@ -8,7 +8,6 @@ from seminartools.matern_kernel import MaternGeospatial
 from tqdm import tqdm
 
 
-
 class DistanceModel(BaseModel):
     def __init__(
         self,
@@ -110,14 +109,19 @@ class DistanceModel(BaseModel):
             # Index of the country in the countries array
             # Allows us to select the correct column
             # from the regression coefficients.
-            country_index_vector = (
-                np.array([np.where(self.countries == country)[0][0] for country in data[self.country_column]])
+            country_index_vector = np.array(
+                [
+                    np.where(self.countries == country)[0][0]
+                    for country in data[self.country_column]
+                ]
             )
-            time_index_vector = (
-                np.array([np.where(self.times == time)[0][0] for time in data.index])
+            time_index_vector = np.array(
+                [np.where(self.times == time)[0][0] for time in data.index]
             )
 
-            total_coordinates = np.array([(time, country) for time in self.times for country in self.countries])
+            total_coordinates = np.array(
+                [(time, country) for time in self.times for country in self.countries]
+            )
 
             # New GP part
             ls = pm.Gamma("ls", alpha=2, beta=1)  # Example length scale prior
@@ -139,11 +143,13 @@ class DistanceModel(BaseModel):
 
             latent = pm.gp.Latent(cov_func=cov_func)
 
-            # dim: num_countries 
+            # dim: num_countries
             country_means = latent.prior("intercepts", X=self.countries)
 
             regression_coefficients = []
-            for exog in tqdm(self.exogenous_columns, desc = "Creating regression coefficients"):
+            for exog in tqdm(
+                self.exogenous_columns, desc="Creating regression coefficients"
+            ):
                 regression_coefficients.append(
                     latent.prior(f"regression_coefficients_{exog}", X=self.countries)
                 )
@@ -153,13 +159,16 @@ class DistanceModel(BaseModel):
 
             # Incorporate the GP into the model's likelihood
             sigma = pm.HalfCauchy("sigma", beta=1)
-            
+
             # We calculate y_t = X_t' beta_{country(t)}
             # in a vectorized way by doing elementwise
             # multiplication of the exogenous variables
             # with the indexed regression coefficients
             # and summing over the columns.
-            mu = (data[self.exogenous_columns].values * regression_coefficients[:, country_index_vector].T).sum(axis=1)
+            mu = (
+                data[self.exogenous_columns].values
+                * regression_coefficients[:, country_index_vector].T
+            ).sum(axis=1)
             # Then we add the constant per country
             mu += country_means[country_index_vector]
 
@@ -171,8 +180,9 @@ class DistanceModel(BaseModel):
                 dims="countrytime",
             )
 
-            self.trace = pm.sample(tune=self.tune, draws=self.draws, chains=self.chains, cores=self.chains)
-
+            self.trace = pm.sample(
+                tune=self.tune, draws=self.draws, chains=self.chains, cores=self.chains
+            )
 
     def _create_lagged_variables(self, data: pd.DataFrame):
         """
@@ -192,7 +202,7 @@ class DistanceModel(BaseModel):
 
         return data.groupby(self.country_column, group_keys=False).apply(_add_lags)
 
-    def predict(self, data: pd.DataFrame, pointwise_aggregation_method: str = "mean"):
+    def predict(self, data: pd.DataFrame, aggregation_method: str = "mean"):
         """
         Predicts the target variable on data.
         """
@@ -202,50 +212,63 @@ class DistanceModel(BaseModel):
         data = self._create_lagged_variables(data)
         data = data.dropna()
 
-        country_index_vector = (
-            np.array([np.where(self.countries == country)[0][0] for country in data[self.country_column]])
-        )
+        # Map countries to their indices in the model
+        country_to_index = {country: idx for idx, country in enumerate(self.countries)}
 
-        with self.model:
-            pm.set_data(
-                {
-                    "country": country_index_vector,
-                    "time": np.array([np.where(self.times == time)[0][0] for time in data.index]),
-                    "exogenous": np.array([np.where(self.exogenous_columns == exog)[0][0] for exog in self.exogenous_columns]),
-                }
-            )
-    
+        # Prepare a container for the predictions from all samples
+        all_predictions = []
 
-        # # Predict using the model that was fit
-        # predictions = self.model.predict(self.results, data=data, inplace=False)
+        # Number of samples in the trace
+        num_samples = len(self.trace.posterior["intercepts"].values[0])
 
-        # if pointwise_aggregation_method == "mean":
-        #     predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean(
-        #         "sample"
-        #     )
-        # else:
-        #     raise ValueError(
-        #         f"Unknown pointwise aggregation method: {pointwise_aggregation_method}"
-        #     )
+        all_country_intercepts = self.trace.posterior["intercepts"].values[0]
+        all_regression_coefficients = {
+            exog: self.trace.posterior[f"regression_coefficients_{exog}"].values[0]
+            for exog in self.exogenous_columns
+        }
 
-        # data["predictions"] = predictions
+        # Iterate over each sample
+        for sample in range(num_samples):
+            # Extract the intercepts and coefficients for this sample
+            country_intercepts = all_country_intercepts[sample, :]
+            regression_coefficients = {
+                exog: all_regression_coefficients[exog][sample]
+                for exog in self.exogenous_columns
+            }
 
-        # predictions = (
-        #     data.reset_index()
-        #     .set_index(["date", self.country_column])["predictions"]
-        #     .rename("inflation")
-        #     .to_frame()
-        # )
-        # # only keep the predictions for the last date
-        # end_date = predictions.index.get_level_values("date").max()
-        # predictions = predictions.loc[end_date:end_date]
+            # Calculate predictions for all final rows in data
+            for _, row in data[data.index == data.index.max()].iterrows():
+                country_idx = country_to_index[row[self.country_column]]
+                intercept = country_intercepts[country_idx]
 
-        # # add 3 months to prediction.get_level_values(0)
-        # predictions.index = pd.MultiIndex.from_tuples(
-        #     zip(
-        #         predictions.index.get_level_values(0) + pd.DateOffset(months=3),
-        #         predictions.index.get_level_values(1),
-        #     )
-        # )
+                # Calculate the contribution from each exogenous variable for this sample
+                exog_contribution = sum(
+                    row[exog] * regression_coefficients[exog][country_idx]
+                    for exog in self.exogenous_columns
+                )
 
-        # return predictions
+                # The prediction for this row and sample
+                prediction = intercept + exog_contribution
+                all_predictions.append(
+                    {"country": row[self.country_column], "prediction": prediction}
+                )
+
+        # Convert the list of lists into a 2D numpy array for easier manipulation
+        all_predictions = pd.DataFrame(all_predictions)
+
+        # Aggregate predictions across samples
+        if aggregation_method == "mean":
+            aggregated_predictions = all_predictions.groupby("country").mean()
+        elif aggregation_method == "median":
+            aggregated_predictions = all_predictions.groupby("country").median()
+        else:
+            raise ValueError(f"Unsupported aggregation method: {aggregation_method}")
+
+        # Create a DataFrame for the aggregated predictions
+        predictions_df = aggregated_predictions.rename(
+            columns={"prediction": "inflation"}
+        ).reset_index()
+        predictions_df["date"] = data.index.max() + pd.DateOffset(months=3)
+        predictions_df = predictions_df.set_index(["date", "country"])
+
+        return predictions_df
