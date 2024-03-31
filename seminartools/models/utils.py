@@ -83,6 +83,11 @@ def make_oos_predictions(
             iterator, total=retrain_time_series_split.num_splits, desc="Splits"
         )
 
+    if model.REQUIRES_ANTE_FULL_FIT:
+        print("Fitting model on the full dataset...")
+        model.full_fit(data)
+        print("Fitted")
+
     # for train_df, test_df, test_start_date in retrain_time_series_split.split(data):
     def worker(train_df, test_df, test_start_date):
         model.fit(train_df)
