@@ -14,7 +14,7 @@ class PCAVARModel(BaseModel):
         inflation_column (str): The name of the column containing the inflation rates.
         num_pcs (int): The number of principal components to use.
         lags (list[int]): The lags to use in the PCA VAR model.
-        standardize_pre_post (bool): 
+        standardize_pre_post (bool):
             if True, we standardize the data before fitting the model and revert the standardization after predicting.
             This way, the covariance we perform PCA on is basically a correlation matrix.
             This should help with avoiding single countries dominating the PCA.
@@ -31,7 +31,7 @@ class PCAVARModel(BaseModel):
         lags: list[int] = [1, 2, 3, 4],
         country_exog_lags: list[int] = [1],
         global_exog_lags: list[int] = [1],
-        standardize_pre_post: bool = False
+        standardize_pre_post: bool = False,
     ):
         self.country_column = country_column
         self.date_column = date_column
@@ -44,13 +44,16 @@ class PCAVARModel(BaseModel):
         self.global_exog_lags = global_exog_lags
         self.standardize_pre_post = standardize_pre_post
 
-
     def fit(self, data: pd.DataFrame):
         """
         Fit the model to the data.
         """
         # Step 0: convert into wide format. Index is yearmonth, column is Country, values are `inflation`.
-        data_wide = data.pivot(index=self.date_column, columns=self.country_column, values=self.inflation_column)
+        data_wide = data.pivot(
+            index=self.date_column,
+            columns=self.country_column,
+            values=self.inflation_column,
+        )
 
         # Need to store the columns of the wide data for during prediction
         self.data_wide_columns = data_wide.columns
@@ -62,7 +65,23 @@ class PCAVARModel(BaseModel):
             data_wide = (data_wide - self.means) / self.stds
 
         # Step 1: factor decomposition
-        self.all_eigenvalues, self.all_eigenvectors = np.linalg.eig(data_wide.cov())
+        cov_matrix = data_wide.cov()
+
+        # we fill missing covariances with the median covariance
+        non_diagonal_values = cov_matrix.to_numpy()[
+            np.triu_indices_from(cov_matrix, k=1)
+        ]
+        median_cov = np.nanmedian(non_diagonal_values)  # Use nanmedian to ignore NaNs
+
+        # only fill the non-diagonal elements
+        old_diagonal = np.diag(cov_matrix)
+        cov_matrix = cov_matrix.fillna(median_cov)
+
+        # make psd by adding negative smallest eigenvalue if it exists
+        epsilon = -max(np.abs(np.min(np.linalg.eigvals(cov_matrix))) - 1e-6, -1e-6)
+        np.fill_diagonal(cov_matrix.values, old_diagonal + epsilon)
+
+        self.all_eigenvalues, self.all_eigenvectors = np.linalg.eig(cov_matrix)
 
         # We only consider the first num_pcs principal components
         # and the corresponding eigenvalues
@@ -70,7 +89,8 @@ class PCAVARModel(BaseModel):
         self.eigenvectors = self.all_eigenvectors[:, : self.num_pcs]
 
         # We project the data onto the first num_pcs principal components
-        pcs = data_wide.to_numpy() @ self.eigenvectors
+        # We forward fill and backfill with 0s to ensure we can calculate PCs
+        pcs = data_wide.ffill().fillna(0).to_numpy() @ self.eigenvectors
         pcs = pd.DataFrame(
             pcs,
             index=data_wide.index,
@@ -81,25 +101,35 @@ class PCAVARModel(BaseModel):
         # Add exogenous variables to the principal components
         # Useable for VAR-X model
         # Put all data in wide format
-        data_wide_country_exog = data.pivot(index=self.date_column, columns=self.country_column, values=self.country_exogenous_columns)
-        data_wide_country_exog.columns = data_wide_country_exog.columns.map('_'.join)
+        data_wide_country_exog = data.pivot(
+            index=self.date_column,
+            columns=self.country_column,
+            values=self.country_exogenous_columns,
+        )
+        data_wide_country_exog.columns = data_wide_country_exog.columns.map("_".join)
         country_exog_columns = data_wide_country_exog.columns.values.tolist()
-        data_wide_global_exog = data.pivot(index=self.date_column, columns=self.country_column, values=self.global_exogenous_columns)
-        top_level_indices = data_wide_global_exog.columns.get_level_values(0).unique() # Global exogenous variables are the same for all countries, so we can just take one column
+        data_wide_global_exog = data.pivot(
+            index=self.date_column,
+            columns=self.country_column,
+            values=self.global_exogenous_columns,
+        )
+        top_level_indices = data_wide_global_exog.columns.get_level_values(
+            0
+        ).unique()  # Global exogenous variables are the same for all countries, so we can just take one column
         columns_to_keep = []
         for top_index in top_level_indices:
             sub_columns = data_wide_global_exog[top_index].columns
             if len(sub_columns) > 0:
                 columns_to_keep.append((top_index, sub_columns[0]))
         data_wide_global_exog = data_wide_global_exog.loc[:, columns_to_keep]
-        data_wide_global_exog.columns = data_wide_global_exog.columns.map('_'.join)
+        data_wide_global_exog.columns = data_wide_global_exog.columns.map("_".join)
         data_wide_global_exog.columns = self.global_exogenous_columns
         global_exog_columns = data_wide_global_exog.columns.values.tolist()
 
         to_concatenate = [pcs, data_wide_country_exog, data_wide_global_exog]
         to_concatenate = [df for df in to_concatenate if not df.empty]
         all_X = pd.concat(to_concatenate, axis=1)
-        all_X = all_X.iloc[max(self.lags):]
+        all_X = all_X.iloc[max(self.lags) :]
 
         # Step 2: fit a VAR model to the principal components
         # long_format = False because PCS is already in wide format
@@ -111,7 +141,7 @@ class PCAVARModel(BaseModel):
             lags=self.lags,
             country_exog_lags=self.country_exog_lags,
             global_exog_lags=self.global_exog_lags,
-            long_format=False
+            long_format=False,
         )
         self.var.fit(all_X)
 
@@ -124,7 +154,11 @@ class PCAVARModel(BaseModel):
         """
         Predict the inflation rate for the next month.
         """
-        data_wide = data.pivot(index=self.date_column, columns=self.country_column, values=self.inflation_column)
+        data_wide = data.pivot(
+            index=self.date_column,
+            columns=self.country_column,
+            values=self.inflation_column,
+        )
         data_wide = data_wide[self.data_wide_columns]
 
         # Step 0.5: standardize the data
@@ -142,23 +176,33 @@ class PCAVARModel(BaseModel):
         # Add exogenous variables to the principal components
         # Useable for VAR-X model
         # Put all data in wide format
-        data_wide_country_exog = data.pivot(index=self.date_column, columns=self.country_column, values=self.country_exogenous_columns)
-        data_wide_country_exog.columns = data_wide_country_exog.columns.map('_'.join)
-        data_wide_global_exog = data.pivot(index=self.date_column, columns=self.country_column, values=self.global_exogenous_columns)
-        top_level_indices = data_wide_global_exog.columns.get_level_values(0).unique() # Global exogenous variables are the same for all countries, so we can just take one column
+        data_wide_country_exog = data.pivot(
+            index=self.date_column,
+            columns=self.country_column,
+            values=self.country_exogenous_columns,
+        )
+        data_wide_country_exog.columns = data_wide_country_exog.columns.map("_".join)
+        data_wide_global_exog = data.pivot(
+            index=self.date_column,
+            columns=self.country_column,
+            values=self.global_exogenous_columns,
+        )
+        top_level_indices = data_wide_global_exog.columns.get_level_values(
+            0
+        ).unique()  # Global exogenous variables are the same for all countries, so we can just take one column
         columns_to_keep = []
         for top_index in top_level_indices:
             sub_columns = data_wide_global_exog[top_index].columns
             if len(sub_columns) > 0:
                 columns_to_keep.append((top_index, sub_columns[0]))
         data_wide_global_exog = data_wide_global_exog.loc[:, columns_to_keep]
-        data_wide_global_exog.columns = data_wide_global_exog.columns.map('_'.join)
+        data_wide_global_exog.columns = data_wide_global_exog.columns.map("_".join)
         data_wide_global_exog.columns = self.global_exogenous_columns
 
         to_concatenate = [pcs, data_wide_country_exog, data_wide_global_exog]
         to_concatenate = [df for df in to_concatenate if not df.empty]
         all_X = pd.concat(to_concatenate, axis=1)
-        all_X = all_X.iloc[max(self.lags):]
+        all_X = all_X.iloc[max(self.lags) :]
 
         # Step 2: forecast the principal components
         pc_predictions = self.var.predict(all_X)
@@ -179,7 +223,8 @@ class PCAVARModel(BaseModel):
         predictions = predictions.stack().reset_index().rename(columns={0: "inflation"})
 
         # Only retain final month
-        predictions = predictions[predictions[self.date_column] == predictions[self.date_column].max()]
+        predictions = predictions[
+            predictions[self.date_column] == predictions[self.date_column].max()
+        ]
 
         return predictions
-
