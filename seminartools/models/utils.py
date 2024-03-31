@@ -1,5 +1,6 @@
 import pandas as pd
 from .base_model import BaseModel
+from ..time_series_split import TimeSeriesSplit
 
 
 def h_period_ahead_forecast(
@@ -49,3 +50,20 @@ Please set h to 1 or use a different model.
         current_time += pd.DateOffset(months=3)
 
     return pd.concat(predictions, ignore_index=True)
+
+def make_oos_predictions(model: BaseModel, data: pd.DataFrame, retrain_time_series_split: TimeSeriesSplit, h: int = 1):
+    """
+    Makes out-of-sample predictions for a given model.
+    Handles exogenous variables.
+    We return a DataFrame with the following columns:
+    - yearmonth: The date of the forecast.
+    - Country: The country for which the forecast was made.
+    - ... (other columns in the data DataFrame excluding inflation and country_column)
+    - inflation: The predicted inflation rate.
+
+    Start date is the first date to forecast.
+
+    Args:
+
+    """
+    raise NotImplementedError
