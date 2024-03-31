@@ -166,7 +166,8 @@ class PCAVARModel(BaseModel):
             data_wide = (data_wide - self.means) / self.stds
 
         # Step 1: project the data onto the first num_pcs principal components
-        pcs = data_wide.to_numpy() @ self.eigenvectors
+        # Forward fill and backfill with 0s to ensure we can calculate PCs
+        pcs = data_wide.ffill().fillna(0).to_numpy() @ self.eigenvectors
         pcs = pd.DataFrame(
             pcs,
             index=data_wide.index,
