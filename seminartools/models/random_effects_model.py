@@ -4,10 +4,12 @@ import bambi as bmb
 from .base_model import BaseModel
 import arviz as az
 
+
 class RandomEffectsModel(BaseModel):
     def __init__(
         self,
         lags: int = 1,
+        date_column: str = "date",
         country_column: str = "country",
         target_column: str = "inflation",
         exogenous_columns: list = [
@@ -23,12 +25,13 @@ class RandomEffectsModel(BaseModel):
         tune: int = 500,
         chains: int = 4,
         num_draws: int = 1500,
-        nuts_sampler: str = "nutpie", # ❤️ nutpie
+        nuts_sampler: str = "nutpie",  # ❤️ nutpie
     ):
         """
         Initializes the model.
         """
         self.lags = lags
+        self.date_column = date_column
         self.country_column = country_column
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
@@ -48,7 +51,7 @@ class RandomEffectsModel(BaseModel):
             for i in range(1, lags + 1)
             for col in exogenous_columns + [target_column]
         ]
-        #self.formula += " + ".join(lagged_exog_columns)
+        # self.formula += " + ".join(lagged_exog_columns)
         for i, col in enumerate(lagged_exog_columns):
             self.formula += f"(0 + {col} | {country_column})"
             if i < len(lagged_exog_columns) - 1:
@@ -59,8 +62,7 @@ class RandomEffectsModel(BaseModel):
         Fits the model on data.
         """
 
-        # Get country out of the multiindex
-        data = data.reset_index(level=self.country_column)
+        data = data.set_index(self.date_column)
 
         countries = data[self.country_column].unique()
         if len(countries) <= 1:
@@ -113,14 +115,15 @@ class RandomEffectsModel(BaseModel):
         """
         Predicts the target variable on data.
         """
-        # Get country out of the multiindex
-        data = data.reset_index(level=self.country_column)
+        data = data.set_index(self.date_column)
 
         data = self._create_lagged_variables(data)
         data = data.dropna()
 
         # Predict using the model that was fit
-        predictions = self.model.predict(self.results, data=data, inplace=False)
+        predictions = self.model.predict(
+            self.results, data=data, inplace=False, sample_new_groups=True
+        )
 
         if pointwise_aggregation_method == "mean":
             predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean(
@@ -135,15 +138,14 @@ class RandomEffectsModel(BaseModel):
 
         predictions = (
             data.reset_index()
-            .set_index(["date", self.country_column])["predictions"]
+            .set_index([self.date_column, self.country_column])["predictions"]
             .rename("inflation")
             .to_frame()
         )
         # only keep the predictions for the last date
-        end_date = predictions.index.get_level_values("date").max()
+        end_date = predictions.index.get_level_values(self.date_column).max()
         predictions = predictions.loc[end_date:end_date]
 
-        # add 3 months to prediction.get_level_values(0)
         predictions.index = pd.MultiIndex.from_tuples(
             zip(
                 predictions.index.get_level_values(0) + pd.DateOffset(months=3),
@@ -151,4 +153,6 @@ class RandomEffectsModel(BaseModel):
             )
         )
 
-        return predictions
+        return predictions.reset_index().rename(
+            columns={"level_0": self.date_column, "level_1": self.country_column}
+        )

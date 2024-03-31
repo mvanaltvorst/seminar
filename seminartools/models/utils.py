@@ -86,14 +86,12 @@ def make_oos_predictions(
     if model.REQUIRES_ANTE_FULL_FIT:
         print("Fitting model on the full dataset...")
         model.full_fit(data)
-        print("Fitted")
+        print("Fitted!")
 
-    # for train_df, test_df, test_start_date in retrain_time_series_split.split(data):
     def worker(train_df, test_df, test_start_date):
         model.fit(train_df)
         # We forecast h periods ahead for each test set
         predictions = h_period_ahead_forecast(model, test_df, test_start_date, h)
-        # acc.append(predictions)
         return predictions
 
     # return pd.concat(acc, ignore_index=True)
