@@ -39,6 +39,8 @@ class ExpandingWindowSplit(TimeSeriesSplit):
             split_end = split_start + split_size
 
             train = data[data[self.date_column] < split_start]
-            test = data[(data[self.date_column] >= split_start) & (data[self.date_column] <= split_end)]
+            # Test data includes train data because it might be required
+            # for subsequent predictions
+            test = data[data[self.date_column] <= split_end]
 
-            yield train, test
+            yield train, test, split_start

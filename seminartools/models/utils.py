@@ -1,6 +1,8 @@
 import pandas as pd
 from .base_model import BaseModel
 from ..time_series_split import TimeSeriesSplit
+from tqdm import tqdm
+from joblib import Parallel, delayed
 
 
 def h_period_ahead_forecast(
@@ -51,7 +53,15 @@ Please set h to 1 or use a different model.
 
     return pd.concat(predictions, ignore_index=True)
 
-def make_oos_predictions(model: BaseModel, data: pd.DataFrame, retrain_time_series_split: TimeSeriesSplit, h: int = 1):
+
+def make_oos_predictions(
+    model: BaseModel,
+    data: pd.DataFrame,
+    retrain_time_series_split: TimeSeriesSplit,
+    h: int = 1,
+    progress: bool = False,
+    num_cores: int = 1
+):
     """
     Makes out-of-sample predictions for a given model.
     Handles exogenous variables.
@@ -66,4 +76,25 @@ def make_oos_predictions(model: BaseModel, data: pd.DataFrame, retrain_time_seri
     Args:
 
     """
-    raise NotImplementedError
+    # acc = []
+    iterator = retrain_time_series_split.split(data)
+    if progress:
+        iterator = tqdm(iterator, total=retrain_time_series_split.num_splits, desc="Splits")
+    # for train_df, test_df, test_start_date in retrain_time_series_split.split(data):
+    def worker(train_df, test_df, test_start_date):
+        model.fit(train_df)
+        # We forecast h periods ahead for each test set
+        predictions = h_period_ahead_forecast(
+            model, test_df, test_start_date, h
+        )
+        # acc.append(predictions)
+        return predictions
+    # return pd.concat(acc, ignore_index=True)
+    return pd.concat(
+        Parallel(n_jobs=num_cores)(
+            delayed(worker)(train_df, test_df, test_start_date)
+            for train_df, test_df, test_start_date in iterator
+        ),
+        ignore_index=True
+    )
+

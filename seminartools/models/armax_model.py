@@ -120,14 +120,16 @@ class ARMAXModel(BaseModel):
         countries = data[self.country_column].unique()
         predictions = []
         for country in countries:
+            if country not in self.models:
+                continue # model was not trained for this country
             country_data = data[data[self.country_column] == country]
             country_data = country_data.set_index("date")
             prediction = self._predict_country(country_data, country)
             prediction_index = country_data.index[-1] + pd.DateOffset(months=3)
 
             predictions.append({
-                "yearmonth": prediction_index,
-                "Country": country,
+                "date": prediction_index,
+                "country": country,
                 "inflation": prediction
             })
 

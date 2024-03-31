@@ -22,8 +22,8 @@ class PCAVARModel(BaseModel):
 
     def __init__(
         self,
-        country_column: str = "Country",
-        date_column: str = "yearmonth",
+        country_column: str = "country",
+        date_column: str = "date",
         inflation_column: str = "inflation",
         num_pcs: int = 3,
         country_exogenous_columns: list[str] = [],
