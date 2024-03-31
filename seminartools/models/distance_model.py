@@ -12,6 +12,7 @@ class DistanceModel(BaseModel):
     def __init__(
         self,
         lags: int = 1,
+        date_column: str = "date",
         country_column: str = "country",
         target_column: str = "inflation",
         exogenous_columns: list = [
@@ -34,6 +35,7 @@ class DistanceModel(BaseModel):
         Initializes the model.
         """
         self.lags = lags
+        self.date_column = date_column
         self.country_column = country_column
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
@@ -58,8 +60,7 @@ class DistanceModel(BaseModel):
         """
         Fits the model on data.
         """
-        # Get country out of the multiindex
-        data = data.reset_index(level=self.country_column)
+        data = data.set_index(self.date_column)
 
         self.countries = data[self.country_column].unique()
         if len(self.countries) <= 1:
@@ -180,7 +181,7 @@ class DistanceModel(BaseModel):
         Predicts the target variable on data, vectorized for improved performance.
         """
         # Prepare data
-        data = data.reset_index(level=self.country_column)
+        data = data.set_index(self.date_column)
         data = self._create_lagged_variables(data)
         data = data.dropna()
         data = data[
@@ -211,6 +212,7 @@ class DistanceModel(BaseModel):
         # Multiply exog_data (broadcasted to [samples, rows, exogenous]) with regression_coefficients
         # Sum over the exogenous dimension, then add intercepts
         country_indices = data["country_idx"].values
+        print(f"{country_indices=}")
         predictions = (
             exog_data[None, :, :] * regression_coefficients[:, country_indices, :]
         ).sum(axis=-1) + country_intercepts[:, country_indices]
@@ -226,11 +228,11 @@ class DistanceModel(BaseModel):
 
         predictions_df = pd.DataFrame(
             {
-                "country": data[self.country_column].values,
+                self.country_column: data[self.country_column].values,
                 "inflation": aggregated_predictions,
             }
         )
-        predictions_df["date"] = data.index.max() + pd.DateOffset(months=3)
-        predictions_df = predictions_df.set_index(["date", "country"])
+        predictions_df[self.date_column] = data.index.max() + pd.DateOffset(months=3)
+        predictions_df = predictions_df
 
         return predictions_df
