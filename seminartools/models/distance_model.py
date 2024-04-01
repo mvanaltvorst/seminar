@@ -225,7 +225,7 @@ class DistanceModel(BaseModel):
 
         return data.groupby(self.country_column, group_keys=False).apply(_add_lags)
 
-    def predict(self, data: pd.DataFrame, aggregation_method: str = "mean"):
+    def predict(self, data: pd.DataFrame, aggregation_method: str = "mean", debug: bool = False):
         """
         Predicts the target variable on data, vectorized for improved performance.
         """
@@ -274,17 +274,20 @@ class DistanceModel(BaseModel):
                 "inflation": aggregated_predictions,
             }
         )
+
         # for debugging purposes, we concat with the used regression coefficients
-        predictions_df = pd.concat(
-            [
-                predictions_df,
-                pd.DataFrame(
-                    self.regression_coefficients[:, country_indices, :].mean(axis=0),
-                    columns=[f"{col}_coefficient" for col in self.regression_columns],
-                ),
-            ],
-            axis=1,
-        )
+        if debug:
+            predictions_df = pd.concat(
+                [
+                    predictions_df,
+                    pd.DataFrame(
+                        self.regression_coefficients[:, country_indices, :].mean(axis=0),
+                        columns=[f"{col}_coefficient" for col in self.regression_columns],
+                    ),
+                ],
+                axis=1,
+            )
+
         predictions_df[self.date_column] = data.index.max() + pd.DateOffset(months=3)
         predictions_df = predictions_df
 
