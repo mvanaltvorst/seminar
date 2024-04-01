@@ -48,6 +48,8 @@ class DistanceModel(BaseModel):
             for col in exogenous_columns + [target_column]
         ]
 
+        self.regression_columns = exogenous_columns + self.lagged_exog_columns
+
         # MCMC parameters
         self.tune = tune
         self.draws = draws
@@ -81,13 +83,21 @@ class DistanceModel(BaseModel):
         # Drop rows with NaNs due to lagged variables
         data = data.dropna()
 
+        # Normalize
+        self.feature_means = data[self.regression_columns].mean()
+        self.feature_stds = data[self.regression_columns].std()
+
+        data[self.regression_columns] = (
+            data[self.regression_columns] - self.feature_means
+        ) / self.feature_stds
+
         self.times = data.index.unique().sort_values()
 
         with pm.Model(
             coords={
                 "country": self.countries,
                 "time": self.times,
-                "exogenous": self.exogenous_columns,
+                "regression_columns": self.regression_columns,
                 "target": [self.target_column],
                 "countrytime": data.index,
             }
@@ -117,11 +127,11 @@ class DistanceModel(BaseModel):
             country_means = latent.prior("intercepts", X=self.countries)
 
             regression_coefficients = []
-            for exog in tqdm(
-                self.exogenous_columns, desc="Creating regression coefficients"
+            for regression_col in tqdm(
+                self.regression_columns, desc="Creating regression coefficients"
             ):
                 regression_coefficients.append(
-                    latent.prior(f"regression_coefficients_{exog}", X=self.countries)
+                    latent.prior(f"regression_coefficients_{regression_col}", X=self.countries)
                 )
 
             # dim: num_regression_coefficients x num_countries
@@ -132,11 +142,11 @@ class DistanceModel(BaseModel):
 
             # We calculate y_t = X_t' beta_{country(t)}
             # in a vectorized way by doing elementwise
-            # multiplication of the exogenous variables
+            # multiplication of the regression variables
             # with the indexed regression coefficients
             # and summing over the columns.
             mu = (
-                data[self.exogenous_columns].values
+                data[self.regression_columns].values
                 * regression_coefficients[:, country_index_vector].T
             ).sum(axis=1)
             # Then we add the constant per country
@@ -167,23 +177,23 @@ class DistanceModel(BaseModel):
             axis=0,
         )
 
-        # [(chains * samples), countries, num_exogenous]
+        # [(chains * samples), countries, num_regression]
         self.regression_coefficients = np.stack(
             [
                 np.concatenate(
                     [
-                        self.trace.posterior[f"regression_coefficients_{exog}"].values[
+                        self.trace.posterior[f"regression_coefficients_{regression_col}"].values[
                             i
                         ]
                         for i in range(
                             self.trace.posterior[
-                                f"regression_coefficients_{exog}"
+                                f"regression_coefficients_{regression_col}"
                             ].values.shape[0]
                         )
                     ],
                     axis=0,
                 )
-                for exog in self.exogenous_columns
+                for regression_col in self.regression_columns
             ],
             axis=-1,
         )
@@ -227,21 +237,26 @@ class DistanceModel(BaseModel):
             data.index == data.index.max()
         ]  # Only use the latest time period for predictions
 
+        # normalize
+        data[self.regression_columns] = (
+            data[self.regression_columns] - self.feature_means
+        ) / self.feature_stds
+
         # Ensure correct order of countries to match model's country order
         data["country_idx"] = data[self.country_column].map(
             {country: idx for idx, country in enumerate(self.countries)}
         ).fillna(len(self.countries))  # `len(self.countries)` points to the new "mean country" coefficients
         data["country_idx"] = data["country_idx"].astype(int)
 
-        # Prepare exogenous variables from data
-        exog_data = data[self.exogenous_columns].values  # Shape: [rows, exogenous]
+        # Prepare regression features from data
+        regression_data = data[self.regression_columns].values  # Shape: [rows, regression_cols]
 
         # Compute predictions
         # Multiply exog_data (broadcasted to [samples, rows, exogenous]) with regression_coefficients
         # Sum over the exogenous dimension, then add intercepts
         country_indices = data["country_idx"].values
         predictions = (
-            exog_data[None, :, :] * self.regression_coefficients[:, country_indices, :]
+            regression_data[None, :, :] * self.regression_coefficients[:, country_indices, :]
         ).sum(axis=-1) + self.country_intercepts[:, country_indices]
         # predictions shape: [samples, rows]
 
@@ -258,6 +273,17 @@ class DistanceModel(BaseModel):
                 self.country_column: data[self.country_column].values,
                 "inflation": aggregated_predictions,
             }
+        )
+        # for debugging purposes, we concat with the used regression coefficients
+        predictions_df = pd.concat(
+            [
+                predictions_df,
+                pd.DataFrame(
+                    self.regression_coefficients[:, country_indices, :].mean(axis=0),
+                    columns=[f"{col}_coefficient" for col in self.regression_columns],
+                ),
+            ],
+            axis=1,
         )
         predictions_df[self.date_column] = data.index.max() + pd.DateOffset(months=3)
         predictions_df = predictions_df
