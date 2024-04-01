@@ -5,6 +5,8 @@ import pandas as pd
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from scipy.stats import gaussian_kde
+from scipy.integrate import simps
+from scipy.signal import fftconvolve
 
 # num cpu
 from multiprocessing import cpu_count
@@ -70,7 +72,6 @@ class UCSVSSModel(BaseModel):
         Run the particle filter on the data of a single country.
         """
         self.aggregation_method = aggregation_method
-
         # dfs = data.groupby("Country").apply(self._run_pf)
         dfs = Parallel(n_jobs=N_CORES)(
             delayed(self._run_pf)(data.loc[data["country"] == country])
@@ -239,19 +240,18 @@ class UCSVSSModel(BaseModel):
             )
         elif self.aggregation_method == "distribution":
             def getPDFRow(row):
-                print(row)
                 pdf = gaussian_kde(row) 
-                print(pdf.dataset)               
                 return pdf
+            
             out = pd.DataFrame(
                {
                     "date": data["date"].values,
                     "etau": np.apply_along_axis(getPDFRow, axis=1,arr=(X[1:, :, 0] / 100)),  # convert back to percentage
                     "etauplusdeltas": etauplusdeltas,  # TODO
-                    "elnsetasq": np.apply_along_axis(getPDFRow, axis = 1, arr=X[1:, :, 1]),  # OTHER SCALE!
-                    "esigmaeta": np.apply_along_axis(getPDFRow,axis=1,arr=np.sqrt(np.exp(X[1:, :, 1]))),
-                    "elnsepsilonsq": np.apply_along_axis(getPDFRow, axis = 1,arr=X[1:, :, 2]),
-                    "esigmaepsilon": np.apply_along_axis(getPDFRow, axis = 1, arr=np.sqrt(np.exp(X[1:, :, 2]))),
+                    "elnsetasq": np.apply_along_axis(getPDFRow, axis = 1, arr=(X[1:, :, 1])),  # OTHER SCALE!
+                    "esigmaeta": np.apply_along_axis(getPDFRow,axis=1,arr=(np.sqrt(np.exp(X[1:, :, 1])))),
+                    "elnsepsilonsq": np.apply_along_axis(getPDFRow, axis = 1,arr=(X[1:, :, 2])),
+                    "esigmaepsilon": np.apply_along_axis(getPDFRow, axis = 1, arr=(np.sqrt(np.exp(X[1:, :, 2])))),
                     "edelta1": np.apply_along_axis(getPDFRow, axis = 1, arr = (X[1:, :, 3] / 100)),
                     "edelta2": np.apply_along_axis(getPDFRow, axis = 1, arr = (X[1:, :, 4] / 100)),
                     "edelta3": np.apply_along_axis(getPDFRow, axis = 1, arr= (X[1:, :, 5] / 100)),
@@ -310,33 +310,37 @@ class UCSVSSModel(BaseModel):
             return 1 if t % 4 == ((i - t0_season) % 4) else 0
 
         tplus1 = len(data) + 1
-        print("mein")
-        print(min(tau_tminus1.dataset))
+
         if self.aggregation_method == "distribution":
-            minVal = min(min(tau_tminus1.dataset),min(delta_tminus1["edelta1"].dataset),min(delta_tminus1["edelta2"].dataset, min(delta_tminus1["edelta3"].dataset), min(delta_tminus1["edelta4"].dataset)))
-            maxVal = max(max(tau_tminus1.dataset),max(delta_tminus1["edelta1"].dataset),max(delta_tminus1["edelta2"].dataset, max(delta_tminus1["edelta3"].dataset), max(delta_tminus1["edelta4"].dataset)))
-            vals = np.linspace(minVal, maxVal, 10000)
-            print(tau_tminus1)
+
+            minVal = min(min(tau_tminus1.dataset[0]),min(delta_tminus1["edelta1"].dataset[0]),min(delta_tminus1["edelta2"].dataset[0]), min(delta_tminus1["edelta3"].dataset[0]), min(delta_tminus1["edelta4"].dataset[0]))
+            maxVal = max(max(tau_tminus1.dataset[0]),max(delta_tminus1["edelta1"].dataset[0]),max(delta_tminus1["edelta2"].dataset[0]), max(delta_tminus1["edelta3"].dataset[0]), max(delta_tminus1["edelta4"].dataset[0]))
+            vals = np.linspace(minVal, maxVal, 1000)
+
             pdf_tau_tminus1 = tau_tminus1(vals)
             if seas(0,tplus1) == 1:
                 pdf_edelta = delta_tminus1["edelta1"](vals)
-            elif seas(1,tplus1):
+            elif seas(1,tplus1) == 1:
                 pdf_edelta = delta_tminus1["edelta2"](vals)
-            elif (seas(2,tplus1)):
+            elif (seas(2,tplus1)) == 1:
                 pdf_edelta = delta_tminus1["edelta3"](vals)
-            elif (seas(3,tplus1)):
+            elif (seas(3,tplus1)) == 1:
                 pdf_edelta = delta_tminus1["edelta4"](vals)
 
-            inflation = np.convolve(pdf_tau_tminus1,pdf_edelta, mode = 'same')
-            print(inflation)
+            #inflation = np.convolve(pdf_tau_tminus1,pdf_edelta, mode='same')
+            inflation = fftconvolve(pdf_tau_tminus1,pdf_edelta)
+            vals_convolved = np.linspace(vals[0], vals[-1], len(inflation))
+
+            area = simps(inflation)
+            normalized_inflation = inflation / area
             return {
-                "inflation": inflation,
+                "inflation": {"pdf":normalized_inflation, "inflation_grid": vals_convolved},
                 "country": data["country"].iloc[0],
                 "date": data["date"].iloc[-1] + pd.DateOffset(months=3),
             }
 
 
-        elif self.aggretion_method == "mean":
+        elif self.aggregation_method == "median":
             return {
                 "inflation": (
                     tau_tminus1
