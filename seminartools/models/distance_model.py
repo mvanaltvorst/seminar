@@ -158,6 +158,36 @@ class DistanceModel(BaseModel):
                 nuts_sampler="nutpie",
             )
 
+        # We stack the chains s.t. we obtain a shape of [(chains * samples), countries]
+        self.country_intercepts = np.concatenate(
+            [
+                self.trace.posterior["intercepts"].values[i]
+                for i in range(self.trace.posterior["intercepts"].values.shape[0])
+            ],
+            axis=0,
+        )
+
+        # [(chains * samples), countries, num_exogenous]
+        self.regression_coefficients = np.stack(
+            [
+                np.concatenate(
+                    [
+                        self.trace.posterior[f"regression_coefficients_{exog}"].values[
+                            i
+                        ]
+                        for i in range(
+                            self.trace.posterior[
+                                f"regression_coefficients_{exog}"
+                            ].values.shape[0]
+                        )
+                    ],
+                    axis=0,
+                )
+                for exog in self.exogenous_columns
+            ],
+            axis=-1,
+        )
+
     def _create_lagged_variables(self, data: pd.DataFrame):
         """
         Creates lagged variables for the model.
@@ -193,18 +223,6 @@ class DistanceModel(BaseModel):
             {country: idx for idx, country in enumerate(self.countries)}
         )
 
-        # Extract model outputs
-        country_intercepts = self.trace.posterior["intercepts"].values[
-            0
-        ]  # Shape: [samples, countries]
-        regression_coefficients = np.stack(
-            [
-                self.trace.posterior[f"regression_coefficients_{exog}"].values[0]
-                for exog in self.exogenous_columns
-            ],
-            axis=-1,
-        )  # Shape: [samples, countries, exogenous]
-
         # Prepare exogenous variables from data
         exog_data = data[self.exogenous_columns].values  # Shape: [rows, exogenous]
 
@@ -214,8 +232,8 @@ class DistanceModel(BaseModel):
         country_indices = data["country_idx"].values
         print(f"{country_indices=}")
         predictions = (
-            exog_data[None, :, :] * regression_coefficients[:, country_indices, :]
-        ).sum(axis=-1) + country_intercepts[:, country_indices]
+            exog_data[None, :, :] * self.regression_coefficients[:, country_indices, :]
+        ).sum(axis=-1) + self.country_intercepts[:, country_indices]
         # predictions shape: [samples, rows]
 
         # Aggregate predictions across samples
