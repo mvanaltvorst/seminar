@@ -86,10 +86,13 @@ class DistanceModel(BaseModel):
         # Normalize
         self.feature_means = data[self.regression_columns].mean()
         self.feature_stds = data[self.regression_columns].std()
+        self.target_mean = data[self.target_column].mean()
+        self.target_std = data[self.target_column].std()
 
         data[self.regression_columns] = (
             data[self.regression_columns] - self.feature_means
         ) / self.feature_stds
+        data[self.target_column] = (data[self.target_column] - self.target_mean) / self.target_std
 
         self.times = data.index.unique().sort_values()
 
@@ -113,7 +116,7 @@ class DistanceModel(BaseModel):
             )
 
             # New GP part
-            ls = pm.Gamma("ls", alpha=2, beta=1)  # Example length scale prior
+            ls = pm.Gamma("ls", alpha=20, beta=0.1)  # Example length scale prior
             cov_func = MaternGeospatial(
                 2,
                 ls,
@@ -290,5 +293,8 @@ class DistanceModel(BaseModel):
 
         predictions_df[self.date_column] = data.index.max() + pd.DateOffset(months=3)
         predictions_df = predictions_df
+
+        # Denormalize
+        predictions_df["inflation"] = predictions_df["inflation"] * self.target_std + self.target_mean
 
         return predictions_df
