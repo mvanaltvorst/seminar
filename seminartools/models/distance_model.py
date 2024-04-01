@@ -188,6 +188,15 @@ class DistanceModel(BaseModel):
             axis=-1,
         )
 
+        # Append the mean intercept and coefficients as new columns
+        # in case we want to predict missing countries in the .predict() method
+        mean_intercepts = np.mean(self.country_intercepts, axis=1, keepdims=True)
+        mean_coefficients = np.mean(self.regression_coefficients, axis=1, keepdims=True)
+
+        self.country_intercepts = np.concatenate([self.country_intercepts, mean_intercepts], axis=1)
+        self.regression_coefficients = np.concatenate([self.regression_coefficients, mean_coefficients], axis=1)
+
+
     def _create_lagged_variables(self, data: pd.DataFrame):
         """
         Creates lagged variables for the model.
@@ -221,7 +230,8 @@ class DistanceModel(BaseModel):
         # Ensure correct order of countries to match model's country order
         data["country_idx"] = data[self.country_column].map(
             {country: idx for idx, country in enumerate(self.countries)}
-        )
+        ).fillna(len(self.countries))  # `len(self.countries)` points to the new "mean country" coefficients
+        data["country_idx"] = data["country_idx"].astype(int)
 
         # Prepare exogenous variables from data
         exog_data = data[self.exogenous_columns].values  # Shape: [rows, exogenous]
@@ -230,7 +240,6 @@ class DistanceModel(BaseModel):
         # Multiply exog_data (broadcasted to [samples, rows, exogenous]) with regression_coefficients
         # Sum over the exogenous dimension, then add intercepts
         country_indices = data["country_idx"].values
-        print(f"{country_indices=}")
         predictions = (
             exog_data[None, :, :] * self.regression_coefficients[:, country_indices, :]
         ).sum(axis=-1) + self.country_intercepts[:, country_indices]
