@@ -24,5 +24,3 @@ def getUpsideEntropy(modelDensity : BaseModel, actual : pd.DataFrame):
 
     median = modelDensity.median
     integral = quad(internalFunction,-np.inf, median)
-
-
