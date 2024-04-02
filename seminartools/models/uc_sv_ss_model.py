@@ -4,6 +4,9 @@ from .base_model import BaseModel
 import pandas as pd
 from joblib import Parallel, delayed
 from tqdm import tqdm
+from scipy.stats import gaussian_kde
+from scipy.integrate import simps
+from scipy.signal import fftconvolve
 
 # num cpu
 from multiprocessing import cpu_count
@@ -71,10 +74,12 @@ class UCSVSSModel(BaseModel):
         """
         pass
 
-    def full_fit(self, data: pd.DataFrame):
+    def full_fit(self, data: pd.DataFrame, aggregation_method : str = "median"):
         """
         Run the particle filter on the data of a single country.
         """
+        self.aggregation_method = aggregation_method
+        # dfs = data.groupby("Country").apply(self._run_pf)
         dfs = Parallel(n_jobs=N_CORES)(
             delayed(self._run_pf)(data.loc[data[self.country_column] == country])
             for country in tqdm(data[self.country_column].unique())
@@ -204,7 +209,7 @@ class UCSVSSModel(BaseModel):
             )
             X[t, :, :] = X[t, indices, :]
 
-        out = pd.DataFrame(
+        """out = pd.DataFrame(
             {
                 self.date_column: data[self.date_column].values,
                 "etau": X[1:, :, 0].mean(axis=1) / 100,  # convert back to percentage
@@ -220,7 +225,48 @@ class UCSVSSModel(BaseModel):
                 "meff": 1 / np.sum(W[1:, :] ** 2, axis=1),
                 "inflation": data["inflation"].values,
             }
-        )
+        )"""
+
+        if self.aggregation_method == "median":
+            out = pd.DataFrame(
+                {
+                    "date": data["date"].values,
+                    "etau": np.median(X[1:, :, 0],axis=1) / 100,  # convert back to percentage
+                    "etauplusdeltas": etauplusdeltas,  # TODO
+                    "elnsetasq": np.median(X[1:, :, 1],axis=1),  # OTHER SCALE!
+                    "esigmaeta": np.median(np.sqrt(np.exp(X[1:, :, 1])),axis=1),
+                    "elnsepsilonsq": np.median(X[1:, :, 2],axis=1),
+                    "esigmaepsilon": np.median(np.sqrt(np.exp(X[1:, :, 2])),axis=1),
+                    "edelta1": np.median(X[1:, :, 3],axis=1) / 100,
+                    "edelta2": np.median(X[1:, :, 4],axis=1) / 100,
+                    "edelta3": np.median(X[1:, :, 5],axis=1) / 100,
+                    "edelta4": np.median(X[1:, :, 6],axis=1) / 100,
+                    "meff": 1 / np.sum(W[1:, :] ** 2, axis=1),
+                    "inflation": data["inflation"].values,
+                }
+            )
+        elif self.aggregation_method == "distribution":
+            def getPDFRow(row):
+                pdf = gaussian_kde(row) 
+                return pdf
+            
+            out = pd.DataFrame(
+               {
+                    "date": data["date"].values,
+                    "etau": np.apply_along_axis(getPDFRow, axis=1,arr=(X[1:, :, 0] / 100)),  # convert back to percentage
+                    "etauplusdeltas": etauplusdeltas,  # TODO
+                    "elnsetasq": np.apply_along_axis(getPDFRow, axis = 1, arr=(X[1:, :, 1])),  # OTHER SCALE!
+                    "esigmaeta": np.apply_along_axis(getPDFRow,axis=1,arr=(np.sqrt(np.exp(X[1:, :, 1])))),
+                    "elnsepsilonsq": np.apply_along_axis(getPDFRow, axis = 1,arr=(X[1:, :, 2])),
+                    "esigmaepsilon": np.apply_along_axis(getPDFRow, axis = 1, arr=(np.sqrt(np.exp(X[1:, :, 2])))),
+                    "edelta1": np.apply_along_axis(getPDFRow, axis = 1, arr = (X[1:, :, 3] / 100)),
+                    "edelta2": np.apply_along_axis(getPDFRow, axis = 1, arr = (X[1:, :, 4] / 100)),
+                    "edelta3": np.apply_along_axis(getPDFRow, axis = 1, arr= (X[1:, :, 5] / 100)),
+                    "edelta4": np.apply_along_axis(getPDFRow, axis = 1, arr= (X[1:, :, 6] / 100)),
+                    "meff": 1 / np.sum(W[1:, :] ** 2, axis=1),
+                    "inflation": data["inflation"].values,
+                }  
+            )
 
         out[self.country_column] = data[self.country_column].iloc[0]
 
@@ -272,14 +318,44 @@ class UCSVSSModel(BaseModel):
 
         tplus1 = len(data) + 1
 
-        return {
-            "inflation": (
-                tau_tminus1
-                + delta_tminus1["edelta1"] * seas(0, tplus1)
-                + delta_tminus1["edelta2"] * seas(1, tplus1)
-                + delta_tminus1["edelta3"] * seas(2, tplus1)
-                + delta_tminus1["edelta4"] * seas(3, tplus1)
-            ),
-            self.country_column: data[self.country_column].iloc[0],
-            self.date_column: data[self.date_column].iloc[-1] + pd.DateOffset(months=3),
-        }
+        if self.aggregation_method == "distribution":
+
+            minVal = min(min(tau_tminus1.dataset[0]),min(delta_tminus1["edelta1"].dataset[0]),min(delta_tminus1["edelta2"].dataset[0]), min(delta_tminus1["edelta3"].dataset[0]), min(delta_tminus1["edelta4"].dataset[0]))
+            maxVal = max(max(tau_tminus1.dataset[0]),max(delta_tminus1["edelta1"].dataset[0]),max(delta_tminus1["edelta2"].dataset[0]), max(delta_tminus1["edelta3"].dataset[0]), max(delta_tminus1["edelta4"].dataset[0]))
+            vals = np.linspace(minVal, maxVal, 1000)
+
+            pdf_tau_tminus1 = tau_tminus1(vals)
+            if seas(0,tplus1) == 1:
+                pdf_edelta = delta_tminus1["edelta1"](vals)
+            elif seas(1,tplus1) == 1:
+                pdf_edelta = delta_tminus1["edelta2"](vals)
+            elif (seas(2,tplus1)) == 1:
+                pdf_edelta = delta_tminus1["edelta3"](vals)
+            elif (seas(3,tplus1)) == 1:
+                pdf_edelta = delta_tminus1["edelta4"](vals)
+
+            #inflation = np.convolve(pdf_tau_tminus1,pdf_edelta, mode='same')
+            inflation = fftconvolve(pdf_tau_tminus1,pdf_edelta)
+            vals_convolved = np.linspace(vals[0], vals[-1], len(inflation))
+
+            area = simps(inflation)
+            normalized_inflation = inflation / area
+            return {
+                "inflation": {"pdf":normalized_inflation, "inflation_grid": vals_convolved},
+                "country": data["country"].iloc[0],
+                "date": data["date"].iloc[-1] + pd.DateOffset(months=3),
+            }
+
+
+        elif self.aggregation_method == "median":
+            return {
+                "inflation": (
+                    tau_tminus1
+                    + delta_tminus1["edelta1"] * seas(0, tplus1)
+                    + delta_tminus1["edelta2"] * seas(1, tplus1)
+                    + delta_tminus1["edelta3"] * seas(2, tplus1)
+                    + delta_tminus1["edelta4"] * seas(3, tplus1)
+                ),
+                "country": data["country"].iloc[0],
+                "date": data["date"].iloc[-1] + pd.DateOffset(months=3),
+            }
