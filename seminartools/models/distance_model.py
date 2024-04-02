@@ -48,7 +48,7 @@ class DistanceModel(BaseModel):
             for col in exogenous_columns + [target_column]
         ]
 
-        self.regression_columns = exogenous_columns + self.lagged_exog_columns
+        self.regression_columns = self.lagged_exog_columns
 
         # MCMC parameters
         self.tune = tune
