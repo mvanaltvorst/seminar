@@ -57,7 +57,7 @@ Please set h to 1 or use a different model.
 
 
 def make_oos_predictions(
-    model: BaseModel,
+    model_generator: callable,
     data: pd.DataFrame,
     retrain_time_series_split: TimeSeriesSplit,
     h: int = 1,
@@ -85,12 +85,16 @@ def make_oos_predictions(
             iterator, total=retrain_time_series_split.num_splits, desc="Splits"
         )
 
+    model = model_generator()
     if model.REQUIRES_ANTE_FULL_FIT:
         print("Fitting model on the full dataset...")
         model.full_fit(data)
         print("Fitted!")
+        # New model generator returns a fitted model
+        model_generator = lambda: model
 
-    def worker(train_df, test_df, test_start_date):
+
+    def worker(model, train_df, test_df, test_start_date):
         model.fit(train_df)
         # We forecast h periods ahead for each test set
         predictions = h_period_ahead_forecast(model, test_df, test_start_date, h)
@@ -99,12 +103,12 @@ def make_oos_predictions(
     # return pd.concat(acc, ignore_index=True)
     return pd.concat(
         Parallel(n_jobs=num_cores)(
-            delayed(worker)(train_df, test_df, test_start_date)
+            delayed(worker)(model_generator(), train_df, test_df, test_start_date)
             for train_df, test_df, test_start_date in iterator
         )
         if num_cores > 1
         else [
-            worker(train_df, test_df, test_start_date)
+            worker(model_generator(), train_df, test_df, test_start_date)
             for train_df, test_df, test_start_date in iterator
         ],
         ignore_index=True,
@@ -133,7 +137,6 @@ def _get_stats(
     mz_slope = results.params["inflation_pred"]
     mz_r2 = results.rsquared
 
-
     return pd.Series(
         {
             "mse": mean_squared_error(
@@ -151,7 +154,7 @@ def _get_stats(
 
 
 def get_stats(
-    models: list[tuple[str, BaseModel]],
+    model_generators: list[tuple[str, callable]],
     data: pd.DataFrame,
     retrain_time_series_split: TimeSeriesSplit,
     h: int = 1,
@@ -162,29 +165,26 @@ def get_stats(
     Compares the performance of multiple models on a given dataset.
     """
 
-    def work_model(name, model):
-        try:
-            predictions = make_oos_predictions(
-                model,
-                data,
-                retrain_time_series_split,
-                h=h,
-                progress=False,
-                num_cores=num_cores_parallel_splits,
-            )
-        except Exception as e:
-            print(e)
-            # print stack trace
-            import traceback
-            traceback.print_exc()
-            print(name)
-            print(data["country"].unique())
-            return None
+    def work_model(name, model_generator):
+        predictions = make_oos_predictions(
+            model_generator,
+            data,
+            retrain_time_series_split,
+            h=h,
+            progress=False,
+            num_cores=num_cores_parallel_splits,
+        )
         return _get_stats(data, predictions)
 
     return pd.DataFrame(
         Parallel(n_jobs=num_cores_parallel_models)(
-            delayed(work_model)(name, model) for name, model in models
-        ) if num_cores_parallel_models > 1 else [work_model(name, model) for name, model in models],
-        index=[name for name, model in models],
+            delayed(work_model)(name, model_generator)
+            for name, model_generator in model_generators
+        )
+        if num_cores_parallel_models > 1
+        else [
+            work_model(name, model_generator)
+            for name, model_generator in model_generators
+        ],
+        index=[name for name, model_generator in model_generators],
     ).sort_values("mse")
