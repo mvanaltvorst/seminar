@@ -89,6 +89,8 @@ class ARMAXModel(BaseModel):
                 model = ARIMA(
                     data[self.inflation_column],
                     order=(p, 0, q),
+                   # enforce_stationarity=False, 
+                  #  enforce_invertibility=False,
                     exog=data[self.exogenous_columns]
                     if self.exogenous_columns
                     else None,
