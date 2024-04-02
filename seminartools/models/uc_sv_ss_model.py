@@ -35,10 +35,17 @@ class UCSVSSModel(BaseModel):
     # Uses intermediate states to quickly evaluate the model on new data
     REQUIRES_ANTE_FULL_FIT = True
 
-    def __init__(self, num_particles: int, stochastic_seasonality: bool):
+    def __init__(
+        self,
+        num_particles: int,
+        stochastic_seasonality: bool,
+        country_column: str = "country",
+        date_column: str = "date",
+    ):
         self.num_particles = num_particles
-        self.country_column = "country"
-        self.aggregation_method = None
+        self.country_column = country_column
+        self.date_column = date_column
+
         self.gamma = GAMMA
 
         # No stochastic seasonality is equivalent to theta = 0
@@ -67,15 +74,15 @@ class UCSVSSModel(BaseModel):
         """
         pass
 
-    def run_pf(self, data: pd.DataFrame, aggregation_method : str = "median"):
+    def full_fit(self, data: pd.DataFrame, aggregation_method : str = "median"):
         """
         Run the particle filter on the data of a single country.
         """
         self.aggregation_method = aggregation_method
         # dfs = data.groupby("Country").apply(self._run_pf)
         dfs = Parallel(n_jobs=N_CORES)(
-            delayed(self._run_pf)(data.loc[data["country"] == country])
-            for country in tqdm(data["country"].unique())
+            delayed(self._run_pf)(data.loc[data[self.country_column] == country])
+            for country in tqdm(data[self.country_column].unique())
         )
         self.stored_state_means = pd.concat(dfs, axis=0)
 
@@ -121,7 +128,7 @@ class UCSVSSModel(BaseModel):
 
         # Seasonality indicator function
         # first we determine which modulo corresponds to Q1
-        t0_season = (data["date"].iloc[0].month - 1) // 3
+        t0_season = (data[self.date_column].iloc[0].month - 1) // 3
 
         def seas(i, t):
             """
@@ -192,7 +199,7 @@ class UCSVSSModel(BaseModel):
             )
             if np.sum(W[t, :]) == 0:
                 print("WARNING: All weights are zero. Resampling will fail.")
-                print("(country: {})".format(data["country"].iloc[0]))
+                print("(country: {})".format(data[self.country_column].iloc[0]))
                 print(f"(t = {t})")
             W[t, :] = W[t, :] / np.sum(W[t, :])
 
@@ -204,7 +211,7 @@ class UCSVSSModel(BaseModel):
 
         """out = pd.DataFrame(
             {
-                "date": data["date"].values,
+                self.date_column: data[self.date_column].values,
                 "etau": X[1:, :, 0].mean(axis=1) / 100,  # convert back to percentage
                 "etauplusdeltas": etauplusdeltas,  # TODO
                 "elnsetasq": X[1:, :, 1].mean(axis=1),  # OTHER SCALE!
@@ -261,9 +268,9 @@ class UCSVSSModel(BaseModel):
                 }  
             )
 
-        out["country"] = data["country"].iloc[0]
+        out[self.country_column] = data[self.country_column].iloc[0]
 
-        return out.set_index(["country", "date"])
+        return out.set_index([self.country_column, self.date_column])
 
     def predict(self, data: pd.DataFrame) -> pd.Series:
         """
@@ -279,8 +286,8 @@ class UCSVSSModel(BaseModel):
 
         return pd.DataFrame(
             [
-                self._predict(data.loc[data["country"] == country])
-                for country in data["country"].unique()
+                self._predict(data.loc[data[self.country_column] == country])
+                for country in data[self.country_column].unique()
             ]
         )
 
@@ -290,14 +297,14 @@ class UCSVSSModel(BaseModel):
         """
         # We have to find the state corresponding to the last row of data
         row = self.stored_state_means.loc[
-            data["country"].iloc[-1], data["date"].iloc[-1]
+            data[self.country_column].iloc[-1], data[self.date_column].iloc[-1]
         ]
         tau_tminus1 = row["etau"]
         delta_tminus1 = row[["edelta1", "edelta2", "edelta3", "edelta4"]]
 
         # Seasonality indicator function
         # first we determine which modulo corresponds to Q1
-        t0_season = (data["date"].iloc[0].month - 1) // 3
+        t0_season = (data[self.date_column].iloc[0].month - 1) // 3
 
         def seas(i, t):
             """

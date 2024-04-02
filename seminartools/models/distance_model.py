@@ -5,15 +5,14 @@ from seminartools.utils import geo_distance
 import arviz as az
 import pymc as pm
 from seminartools.matern_kernel import MaternGeospatial
-import pytensor
 from tqdm import tqdm
-
 
 
 class DistanceModel(BaseModel):
     def __init__(
         self,
         lags: int = 1,
+        date_column: str = "date",
         country_column: str = "country",
         target_column: str = "inflation",
         exogenous_columns: list = [
@@ -36,6 +35,7 @@ class DistanceModel(BaseModel):
         Initializes the model.
         """
         self.lags = lags
+        self.date_column = date_column
         self.country_column = country_column
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
@@ -47,6 +47,8 @@ class DistanceModel(BaseModel):
             for i in range(1, lags + 1)
             for col in exogenous_columns + [target_column]
         ]
+
+        self.regression_columns = exogenous_columns + self.lagged_exog_columns
 
         # MCMC parameters
         self.tune = tune
@@ -60,8 +62,7 @@ class DistanceModel(BaseModel):
         """
         Fits the model on data.
         """
-        # Get country out of the multiindex
-        data = data.reset_index(level=self.country_column)
+        data = data.set_index(self.date_column)
 
         self.countries = data[self.country_column].unique()
         if len(self.countries) <= 1:
@@ -82,45 +83,40 @@ class DistanceModel(BaseModel):
         # Drop rows with NaNs due to lagged variables
         data = data.dropna()
 
+        # Normalize
+        self.feature_means = data[self.regression_columns].mean()
+        self.feature_stds = data[self.regression_columns].std()
+        self.target_mean = data[self.target_column].mean()
+        self.target_std = data[self.target_column].std()
+
+        data[self.regression_columns] = (
+            data[self.regression_columns] - self.feature_means
+        ) / self.feature_stds
+        data[self.target_column] = (data[self.target_column] - self.target_mean) / self.target_std
+
         self.times = data.index.unique().sort_values()
 
         with pm.Model(
             coords={
                 "country": self.countries,
                 "time": self.times,
-                "exogenous": self.exogenous_columns,
+                "regression_columns": self.regression_columns,
                 "target": [self.target_column],
+                "countrytime": data.index,
             }
         ) as self.model:
-            country_mean_tau = pm.Gamma("country_mean_tau", alpha=1, beta=1)
-            country_means = pm.Normal(
-                "country_means", mu=0, tau=country_mean_tau, dims="country"
-            )
-
-            regression_coefficient_tau = pm.Gamma(
-                "regression_coefficient_tau", alpha=1, beta=1
-            )
-            regression_coefficients = pm.Normal(
-                "regression_coefficients",
-                mu=0,
-                tau=regression_coefficient_tau,
-                dims=["exogenous", "country"],
-            )
-
             # Index of the country in the countries array
             # Allows us to select the correct column
             # from the regression coefficients.
-            country_index_vector = (
-                np.array([np.where(self.countries == country)[0][0] for country in data[self.country_column]])
+            country_index_vector = np.array(
+                [
+                    np.where(self.countries == country)[0][0]
+                    for country in data[self.country_column]
+                ]
             )
-            time_index_vector = (
-                np.array([np.where(self.times == time)[0][0] for time in data.index])
-            )
-
-            total_coordinates = np.array([(time, country) for time in self.times for country in self.countries])
 
             # New GP part
-            ls = pm.Gamma("ls", alpha=2, beta=1)  # Example length scale prior
+            ls = pm.Gamma("ls", alpha=20, beta=0.1)  # Example length scale prior
             cov_func = MaternGeospatial(
                 2,
                 ls,
@@ -129,31 +125,35 @@ class DistanceModel(BaseModel):
             )
 
             latent = pm.gp.Latent(cov_func=cov_func)
-            country_time_noises = []
-            for time in tqdm(self.times):
-                gp_noise = latent.prior(f"gp_noise_{time}", X=self.countries)
-                # Indexing to assign the generated noise to the correct positions
-                country_time_noises.append(gp_noise)
 
-            country_time_noise = pytensor.stack(country_time_noises)
+            # dim: num_countries
+            country_means = latent.prior("intercepts", X=self.countries)
 
+            regression_coefficients = []
+            for regression_col in tqdm(
+                self.regression_columns, desc="Creating regression coefficients"
+            ):
+                regression_coefficients.append(
+                    latent.prior(f"regression_coefficients_{regression_col}", X=self.countries)
+                )
 
-            print(f"{country_time_noise.eval().shape=}")
+            # dim: num_regression_coefficients x num_countries
+            regression_coefficients = pm.math.stack(regression_coefficients)
 
             # Incorporate the GP into the model's likelihood
             sigma = pm.HalfCauchy("sigma", beta=1)
-            
+
             # We calculate y_t = X_t' beta_{country(t)}
             # in a vectorized way by doing elementwise
-            # multiplication of the exogenous variables
+            # multiplication of the regression variables
             # with the indexed regression coefficients
             # and summing over the columns.
-            mu = (data[self.exogenous_columns].values * regression_coefficients[:, country_index_vector].T).sum(axis=1)
+            mu = (
+                data[self.regression_columns].values
+                * regression_coefficients[:, country_index_vector].T
+            ).sum(axis=1)
             # Then we add the constant per country
             mu += country_means[country_index_vector]
-            # And the correlated noise
-            # TODO: different correlated noise every time period
-            mu += country_correlated_noise[time_index_vector, country_index_vector]
 
             y_obs = pm.Normal(
                 "likelihood",
@@ -163,7 +163,51 @@ class DistanceModel(BaseModel):
                 dims="countrytime",
             )
 
-            self.trace = pm.sample(tune=self.tune, draws=self.draws, chains=self.chains, cores=self.chains)
+            self.trace = pm.sample(
+                tune=self.tune,
+                draws=self.draws,
+                chains=self.chains,
+                cores=self.chains,
+                nuts_sampler="nutpie",
+            )
+
+        # We stack the chains s.t. we obtain a shape of [(chains * samples), countries]
+        self.country_intercepts = np.concatenate(
+            [
+                self.trace.posterior["intercepts"].values[i]
+                for i in range(self.trace.posterior["intercepts"].values.shape[0])
+            ],
+            axis=0,
+        )
+
+        # [(chains * samples), countries, num_regression]
+        self.regression_coefficients = np.stack(
+            [
+                np.concatenate(
+                    [
+                        self.trace.posterior[f"regression_coefficients_{regression_col}"].values[
+                            i
+                        ]
+                        for i in range(
+                            self.trace.posterior[
+                                f"regression_coefficients_{regression_col}"
+                            ].values.shape[0]
+                        )
+                    ],
+                    axis=0,
+                )
+                for regression_col in self.regression_columns
+            ],
+            axis=-1,
+        )
+
+        # Append the mean intercept and coefficients as new columns
+        # in case we want to predict missing countries in the .predict() method
+        mean_intercepts = np.mean(self.country_intercepts, axis=1, keepdims=True)
+        mean_coefficients = np.mean(self.regression_coefficients, axis=1, keepdims=True)
+
+        self.country_intercepts = np.concatenate([self.country_intercepts, mean_intercepts], axis=1)
+        self.regression_coefficients = np.concatenate([self.regression_coefficients, mean_coefficients], axis=1)
 
 
     def _create_lagged_variables(self, data: pd.DataFrame):
@@ -184,46 +228,73 @@ class DistanceModel(BaseModel):
 
         return data.groupby(self.country_column, group_keys=False).apply(_add_lags)
 
-    def predict(self, data: pd.DataFrame, pointwise_aggregation_method: str = "mean"):
+    def predict(self, data: pd.DataFrame, aggregation_method: str = "mean", debug: bool = False):
         """
-        Predicts the target variable on data.
+        Predicts the target variable on data, vectorized for improved performance.
         """
-        # Get country out of the multiindex
-        data = data.reset_index(level=self.country_column)
-
+        # Prepare data
+        data = data.set_index(self.date_column)
         data = self._create_lagged_variables(data)
         data = data.dropna()
+        data = data[
+            data.index == data.index.max()
+        ]  # Only use the latest time period for predictions
 
-        # # Predict using the model that was fit
-        # predictions = self.model.predict(self.results, data=data, inplace=False)
+        # normalize
+        data[self.regression_columns] = (
+            data[self.regression_columns] - self.feature_means
+        ) / self.feature_stds
 
-        # if pointwise_aggregation_method == "mean":
-        #     predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean(
-        #         "sample"
-        #     )
-        # else:
-        #     raise ValueError(
-        #         f"Unknown pointwise aggregation method: {pointwise_aggregation_method}"
-        #     )
+        # Ensure correct order of countries to match model's country order
+        data["country_idx"] = data[self.country_column].map(
+            {country: idx for idx, country in enumerate(self.countries)}
+        ).fillna(len(self.countries))  # `len(self.countries)` points to the new "mean country" coefficients
+        data["country_idx"] = data["country_idx"].astype(int)
 
-        # data["predictions"] = predictions
+        # Prepare regression features from data
+        regression_data = data[self.regression_columns].values  # Shape: [rows, regression_cols]
 
-        # predictions = (
-        #     data.reset_index()
-        #     .set_index(["date", self.country_column])["predictions"]
-        #     .rename("inflation")
-        #     .to_frame()
-        # )
-        # # only keep the predictions for the last date
-        # end_date = predictions.index.get_level_values("date").max()
-        # predictions = predictions.loc[end_date:end_date]
+        # Compute predictions
+        # Multiply exog_data (broadcasted to [samples, rows, exogenous]) with regression_coefficients
+        # Sum over the exogenous dimension, then add intercepts
+        country_indices = data["country_idx"].values
+        predictions = (
+            regression_data[None, :, :] * self.regression_coefficients[:, country_indices, :]
+        ).sum(axis=-1) + self.country_intercepts[:, country_indices]
+        # predictions shape: [samples, rows]
 
-        # # add 3 months to prediction.get_level_values(0)
-        # predictions.index = pd.MultiIndex.from_tuples(
-        #     zip(
-        #         predictions.index.get_level_values(0) + pd.DateOffset(months=3),
-        #         predictions.index.get_level_values(1),
-        #     )
-        # )
+        # Aggregate predictions across samples
+        if aggregation_method == "mean":
+            aggregated_predictions = predictions.mean(axis=0)
+        elif aggregation_method == "median":
+            aggregated_predictions = np.median(predictions, axis=0)
+        else:
+            raise ValueError(f"Unsupported aggregation method: {aggregation_method}")
 
-        # return predictions
+        predictions_df = pd.DataFrame(
+            {
+                self.country_column: data[self.country_column].values,
+                "inflation": aggregated_predictions,
+            }
+        )
+
+        # for debugging purposes, we concat with the used regression coefficients
+        if debug:
+            predictions_df = pd.concat(
+                [
+                    predictions_df,
+                    pd.DataFrame(
+                        self.regression_coefficients[:, country_indices, :].mean(axis=0),
+                        columns=[f"{col}_coefficient" for col in self.regression_columns],
+                    ),
+                ],
+                axis=1,
+            )
+
+        predictions_df[self.date_column] = data.index.max() + pd.DateOffset(months=3)
+        predictions_df = predictions_df
+
+        # Denormalize
+        predictions_df["inflation"] = predictions_df["inflation"] * self.target_std + self.target_mean
+
+        return predictions_df

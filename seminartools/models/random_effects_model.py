@@ -5,44 +5,11 @@ from .base_model import BaseModel
 import arviz as az
 
 
-def _get_inference_method_chains():
-    """
-    Bambi is quicker with nuts_blackjax if you have a NVIDIA GPU.
-
-    If not, mcmc is the default inference method which is slower but still
-    the best option for CPU.
-
-    This method returns the best possible inference method on a given machine.
-
-    Returns
-    -------
-    str
-        Inference method to use.
-    """
-    inference_method = "mcmc"
-    chains = 4
-    num_draws = 1500
-    
-
-    #TODO: WHY DOES JAX GPU BACKEND NOT WORK???
-    # try:
-    #     import jax
-
-    #     if jax.device_count() > 0:
-    #         inference_method = "nuts_blackjax"
-    #         chains = 1  # NUTS is not parallelizable
-    #         num_draws = 25000
-    #         print("GPU!!!")
-    # except ImportError:
-    #     pass
-
-    return inference_method, chains, num_draws
-
-
 class RandomEffectsModel(BaseModel):
     def __init__(
         self,
         lags: int = 1,
+        date_column: str = "date",
         country_column: str = "country",
         target_column: str = "inflation",
         exogenous_columns: list = [
@@ -56,20 +23,24 @@ class RandomEffectsModel(BaseModel):
             "commodity_iPRECIOUSMET",
         ],
         tune: int = 500,
+        chains: int = 4,
+        num_draws: int = 1500,
+        nuts_sampler: str = "nutpie",  # ❤️ nutpie
     ):
         """
         Initializes the model.
         """
         self.lags = lags
+        self.date_column = date_column
         self.country_column = country_column
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
-        self.inference_method, self.chains, self.num_draws = (
-            _get_inference_method_chains()
-        )
 
         # MCMC parameters
         self.tune = tune
+        self.chains = chains
+        self.num_draws = num_draws
+        self.nuts_sampler = nuts_sampler
 
         # Build the formula to be used by Bambi
         self.formula = f"{target_column} ~ (1 | {country_column}) + "
@@ -80,7 +51,7 @@ class RandomEffectsModel(BaseModel):
             for i in range(1, lags + 1)
             for col in exogenous_columns + [target_column]
         ]
-        #self.formula += " + ".join(lagged_exog_columns)
+        # self.formula += " + ".join(lagged_exog_columns)
         for i, col in enumerate(lagged_exog_columns):
             self.formula += f"(0 + {col} | {country_column})"
             if i < len(lagged_exog_columns) - 1:
@@ -91,8 +62,7 @@ class RandomEffectsModel(BaseModel):
         Fits the model on data.
         """
 
-        # Get country out of the multiindex
-        data = data.reset_index(level=self.country_column)
+        data = data.set_index(self.date_column)
 
         countries = data[self.country_column].unique()
         if len(countries) <= 1:
@@ -116,11 +86,11 @@ class RandomEffectsModel(BaseModel):
         # Fit the model
         self.model = bmb.Model(self.formula, data=data)
         self.results = self.model.fit(
-            inference_method=self.inference_method,
             draws=self.num_draws,
             tune=self.tune,
             chains=self.chains,
             cores=self.chains,
+            nuts_sampler=self.nuts_sampler,
         )
 
     def _create_lagged_variables(self, data: pd.DataFrame):
@@ -145,14 +115,15 @@ class RandomEffectsModel(BaseModel):
         """
         Predicts the target variable on data.
         """
-        # Get country out of the multiindex
-        data = data.reset_index(level=self.country_column)
+        data = data.set_index(self.date_column)
 
         data = self._create_lagged_variables(data)
         data = data.dropna()
 
         # Predict using the model that was fit
-        predictions = self.model.predict(self.results, data=data, inplace=False)
+        predictions = self.model.predict(
+            self.results, data=data, inplace=False, sample_new_groups=True
+        )
 
         if pointwise_aggregation_method == "mean":
             predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean(
@@ -167,15 +138,14 @@ class RandomEffectsModel(BaseModel):
 
         predictions = (
             data.reset_index()
-            .set_index(["date", self.country_column])["predictions"]
+            .set_index([self.date_column, self.country_column])["predictions"]
             .rename("inflation")
             .to_frame()
         )
         # only keep the predictions for the last date
-        end_date = predictions.index.get_level_values("date").max()
+        end_date = predictions.index.get_level_values(self.date_column).max()
         predictions = predictions.loc[end_date:end_date]
 
-        # add 3 months to prediction.get_level_values(0)
         predictions.index = pd.MultiIndex.from_tuples(
             zip(
                 predictions.index.get_level_values(0) + pd.DateOffset(months=3),
@@ -183,4 +153,6 @@ class RandomEffectsModel(BaseModel):
             )
         )
 
-        return predictions
+        return predictions.reset_index().rename(
+            columns={"level_0": self.date_column, "level_1": self.country_column}
+        )

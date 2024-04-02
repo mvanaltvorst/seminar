@@ -33,14 +33,16 @@ class FourQuarterAverageModel(BaseModel):
         Predict the inflation rate for the next month.
         """
 
-        data = data.pivot(index='date', columns= self.country_column, values= self.inflation_column)
+        data = data.pivot(
+            index="date", columns=self.country_column, values=self.inflation_column
+        )
         # we split into countries
         countries = data.columns.unique()
         predictions = []
 
         for country in countries:
             country_data = data[country]
-            country_data=  country_data.to_frame(self.inflation_column)
+            country_data = country_data.to_frame(self.inflation_column)
 
             # get the last four quarters
             last_four = country_data[self.inflation_column].tail(4)

@@ -24,7 +24,7 @@ class ARMAXModel(BaseModel):
         self,
         criterion: str = "aic",
         exogenous_columns: list[str] = [],
-        country_column: str = "Country",
+        country_column: str = "country",
         inflation_column: str = "inflation",
         max_p: int = 3,
         max_q: int = 3,
@@ -47,7 +47,7 @@ class ARMAXModel(BaseModel):
 
         for country in countries:
             country_data = data[data[self.country_column] == country]
-            country_data = country_data.set_index("yearmonth")
+            country_data = country_data.set_index("date")
             country_data.index = pd.DatetimeIndex(country_data.index).to_period(
                 "Q"
             )  # For quarterly data
@@ -120,14 +120,16 @@ class ARMAXModel(BaseModel):
         countries = data[self.country_column].unique()
         predictions = []
         for country in countries:
+            if country not in self.models:
+                continue # model was not trained for this country
             country_data = data[data[self.country_column] == country]
-            country_data = country_data.set_index("yearmonth")
+            country_data = country_data.set_index("date")
             prediction = self._predict_country(country_data, country)
             prediction_index = country_data.index[-1] + pd.DateOffset(months=3)
 
             predictions.append({
-                "yearmonth": prediction_index,
-                "Country": country,
+                "date": prediction_index,
+                "country": country,
                 "inflation": prediction
             })
 

@@ -16,7 +16,7 @@ class MaternGeospatial(pm.gp.cov.Stationary):
         ls,
         active_dims=None,
         distance_function: callable = geo_distance,
-        distance_scaling: float = 1000,
+        distance_scaling: float = 100,
         matern: pm.gp.cov.BaseCovariance = Matern32,
     ):
         if input_dims != 2:
