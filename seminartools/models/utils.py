@@ -87,7 +87,7 @@ def make_oos_predictions(
 
     model = model_generator()
     if model.REQUIRES_ANTE_FULL_FIT:
-        print("Fitting model on the full dataset...")
+        print(f"Fitting model on the full dataset... ({model=})")
         model.full_fit(data)
         print("Fitted!")
         # New model generator returns a fitted model
