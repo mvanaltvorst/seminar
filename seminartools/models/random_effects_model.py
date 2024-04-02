@@ -57,6 +57,8 @@ class RandomEffectsModel(BaseModel):
             if i < len(lagged_exog_columns) - 1:
                 self.formula += " + "
 
+        
+
     def fit(self, data: pd.DataFrame):
         """
         Fits the model on data.

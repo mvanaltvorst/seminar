@@ -3,6 +3,8 @@ from .base_model import BaseModel
 from ..time_series_split import TimeSeriesSplit
 from tqdm import tqdm
 from joblib import Parallel, delayed
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import statsmodels.api as sm
 
 
 def h_period_ahead_forecast(
@@ -107,3 +109,82 @@ def make_oos_predictions(
         ],
         ignore_index=True,
     )
+
+
+def _get_stats(
+    original_data: pd.DataFrame,
+    predictions: pd.DataFrame,
+    date_column: str = "date",
+    country_column: str = "country",
+):
+    """
+    Calculates the mean squared error, mean absolute error, and mean absolute percentage error
+    for the predictions.
+    """
+    merged = predictions.merge(
+        original_data, on=[date_column, country_column], suffixes=("_pred", "_true")
+    ).dropna()
+
+    # do mincer zarnowitz and get intercept, slope, and r2
+    merged["constant"] = 1
+    model = sm.OLS(merged["inflation_true"], merged[["constant", "inflation_pred"]])
+    results = model.fit()
+    mz_intercept = results.params["constant"]
+    mz_slope = results.params["inflation_pred"]
+    mz_r2 = results.rsquared
+
+
+    return pd.Series(
+        {
+            "mse": mean_squared_error(
+                merged["inflation_true"], merged["inflation_pred"]
+            ),
+            "mae": mean_absolute_error(
+                merged["inflation_true"], merged["inflation_pred"]
+            ),
+            "r2": r2_score(merged["inflation_true"], merged["inflation_pred"]),
+            "mz_intercept": mz_intercept,
+            "mz_slope": mz_slope,
+            "mz_r2": mz_r2,
+        }
+    )
+
+
+def get_stats(
+    models: list[tuple[str, BaseModel]],
+    data: pd.DataFrame,
+    retrain_time_series_split: TimeSeriesSplit,
+    h: int = 1,
+    num_cores_parallel_models: int = 3,
+    num_cores_parallel_splits: int = 5,
+):
+    """
+    Compares the performance of multiple models on a given dataset.
+    """
+
+    def work_model(name, model):
+        try:
+            predictions = make_oos_predictions(
+                model,
+                data,
+                retrain_time_series_split,
+                h=h,
+                progress=False,
+                num_cores=num_cores_parallel_splits,
+            )
+        except Exception as e:
+            print(e)
+            # print stack trace
+            import traceback
+            traceback.print_exc()
+            print(name)
+            print(data["country"].unique())
+            return None
+        return _get_stats(data, predictions)
+
+    return pd.DataFrame(
+        Parallel(n_jobs=num_cores_parallel_models)(
+            delayed(work_model)(name, model) for name, model in models
+        ) if num_cores_parallel_models > 1 else [work_model(name, model) for name, model in models],
+        index=[name for name, model in models],
+    ).sort_values("mse")
