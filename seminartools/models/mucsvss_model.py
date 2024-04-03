@@ -6,7 +6,7 @@ from scipy.integrate import simps
 from scipy.signal import fftconvolve
 from ..utils import geo_distance
 import jax.numpy as jnp
-from jax import random, jit, vmap
+from jax import lax, random, jit, vmap
 from jax.scipy.stats import norm
 from tqdm import tqdm
 
@@ -181,7 +181,6 @@ class MUCSVSSModel(BaseModel):
             )
 
         # Weights in log space
-        #W0 = jnp.ones(self.num_particles) / self.num_particles
         W0 = jnp.full(self.num_particles, -jnp.log(self.num_particles))
 
         # history of X's
@@ -202,7 +201,12 @@ class MUCSVSSModel(BaseModel):
             season 3: Q4
             """
 
-            return 1 if t % 4 == ((i - t0_season) % 4) else 0
+            # return 1 if t % 4 == ((i - t0_season) % 4) else 0
+
+            # Using lax.cond for JIT-compatible conditional logic
+            return lax.cond(
+                t % 4 == ((i - t0_season) % 4), lambda _: 1, lambda _: 0, None
+            )
 
         def update_single_particle(prev_x, t, n, key):
             """
@@ -226,17 +230,24 @@ class MUCSVSSModel(BaseModel):
             )
 
             # deltas
+            def update_deltas(delta_idx, x, subkey):
+                def true_fun(_):
+                    update = prev_x[delta_idx * n : (delta_idx + 1) * n] + jnp.sqrt(
+                        self.theta
+                    ) * random.normal(key=subkey, shape=(n,))
+                    return x.at[delta_idx * n : (delta_idx + 1) * n].set(update)
+
+                def false_fun(_):
+                    return x  # No update needed, return x as is
+
+                # Use lax.cond for conditional execution
+                return lax.cond(
+                    seas(delta_idx - 3, t), true_fun, false_fun, None
+                )  # Operand is None since true_fun and false_fun handle the logic internally
+
             for delta_idx in [3, 4, 5, 6]:
-                if seas(delta_idx - 3, t):
-                    key, subkey = random.split(key)
-                    x = x.at[delta_idx * n : (delta_idx + 1) * n].set(
-                        prev_x[delta_idx * n : (delta_idx + 1) * n]
-                        + jnp.sqrt(self.theta) * random.normal(key=subkey, shape=(n,))
-                    )
-                else:
-                    x = x.at[delta_idx * n : (delta_idx + 1) * n].set(
-                        prev_x[delta_idx * n : (delta_idx + 1) * n]
-                    )
+                key, subkey = random.split(key)
+                x = update_deltas(delta_idx, x, subkey)
 
             # restrict sum of deltas to be 0 per country
             for country_idx in range(n):
@@ -275,10 +286,13 @@ class MUCSVSSModel(BaseModel):
             )
             return x
 
-        update_particles = vmap(
-            update_single_particle,
-            in_axes=(0, None, None, 0),
-            out_axes=0,
+        update_particles = jit(
+            vmap(
+                update_single_particle,
+                in_axes=(0, None, None, 0),
+                out_axes=0,
+            ),
+            static_argnums=(2,),
         )
 
         # History of tau + delta_1 * seas_1 + ... + delta_4 * seas_4
@@ -287,7 +301,9 @@ class MUCSVSSModel(BaseModel):
             zip(range(1, len(self.times) + 1), self.times), total=len(self.times)
         ):
             # Step 1: predict and update
-            W = W.at[t, :].set(jnp.full(self.num_particles, -jnp.log(self.num_particles)))
+            W = W.at[t, :].set(
+                jnp.full(self.num_particles, -jnp.log(self.num_particles))
+            )
 
             subkeys = random.split(key, self.num_particles)
             X = X.at[t, :, :].set(update_particles(X[t - 1, :, :], t, n, subkeys))
@@ -329,7 +345,7 @@ class MUCSVSSModel(BaseModel):
                     axis=1,
                 )
             )
-            
+
             # For numerical stability, we subtract the max value from the log weights
             max_W = jnp.max(W[t, :])
             W = W.at[t, :].set(W[t, :] - max_W)
@@ -381,7 +397,7 @@ class MUCSVSSModel(BaseModel):
                     "inflation": data.groupby(self.date_column)[self.inflation_column]
                     .median()
                     .values,
-                    "country": jnp.repeat(self.countries, len(self.times)),
+                    "country": jnp.repeat(jnp.array(self.countries), len(self.times)),
                 }
             )
         elif self.aggregation_method == "distribution":
