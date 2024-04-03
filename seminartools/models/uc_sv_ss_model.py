@@ -20,6 +20,7 @@ THETA = 0.002
 INIT_LNSETASQ = 0
 INIT_LNSEPSILONSQ = 0
 INIT_DELTA = 0
+INIT_TAU = 0
 
 VAGUE_PRIOR_LNSETASQ_SIGMA = 3
 VAGUE_PRIOR_LNSEPSILONSQ_SIGMA = 3
@@ -57,6 +58,7 @@ class UCSVSSModel(BaseModel):
         self.init_lnsetasq = INIT_LNSETASQ
         self.init_lnsepsilonsq = INIT_LNSEPSILONSQ
         self.init_delta = INIT_DELTA
+        self.init_tau = INIT_TAU
 
         self.vague_prior_lnsetasq_sigma = VAGUE_PRIOR_LNSETASQ_SIGMA
         self.vague_prior_lnsepsilonsq_sigma = VAGUE_PRIOR_LNSEPSILONSQ_SIGMA
@@ -97,7 +99,7 @@ class UCSVSSModel(BaseModel):
         # [tau, lnsetasq, lnsepsilonsq, delta1, delta2, delta3, delta4]
         X0 = np.zeros((self.num_particles, 7))
         X0[:, 0] = np.random.normal(
-            size=self.num_particles, loc=1, scale=self.vague_prior_tau_sigma
+            size=self.num_particles, loc=self.init_tau, scale=self.vague_prior_tau_sigma
         )
         X0[:, 1] = np.random.normal(
             size=self.num_particles,
@@ -208,24 +210,6 @@ class UCSVSSModel(BaseModel):
                 self.num_particles, size=self.num_particles, replace=True, p=W[t, :]
             )
             X[t, :, :] = X[t, indices, :]
-
-        """out = pd.DataFrame(
-            {
-                self.date_column: data[self.date_column].values,
-                "etau": X[1:, :, 0].mean(axis=1) / 100,  # convert back to percentage
-                "etauplusdeltas": etauplusdeltas,  # TODO
-                "elnsetasq": X[1:, :, 1].mean(axis=1),  # OTHER SCALE!
-                "esigmaeta": np.sqrt(np.exp(X[1:, :, 1])).mean(axis=1),
-                "elnsepsilonsq": X[1:, :, 2].mean(axis=1),
-                "esigmaepsilon": np.sqrt(np.exp(X[1:, :, 2])).mean(axis=1),
-                "edelta1": X[1:, :, 3].mean(axis=1) / 100,
-                "edelta2": X[1:, :, 4].mean(axis=1) / 100,
-                "edelta3": X[1:, :, 5].mean(axis=1) / 100,
-                "edelta4": X[1:, :, 6].mean(axis=1) / 100,
-                "meff": 1 / np.sum(W[1:, :] ** 2, axis=1),
-                "inflation": data["inflation"].values,
-            }
-        )"""
 
         if self.aggregation_method == "median":
             out = pd.DataFrame(
