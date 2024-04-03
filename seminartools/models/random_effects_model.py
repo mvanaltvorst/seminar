@@ -12,16 +12,7 @@ class RandomEffectsModel(BaseModel):
         date_column: str = "date",
         country_column: str = "country",
         target_column: str = "inflation",
-        exogenous_columns: list = [
-            "gdp_growth",
-            "interest_rate",
-            "unemployment_rate",
-            "commodity_CRUDE_PETRO",
-            "commodity_iNATGAS",
-            "commodity_iAGRICULTURE",
-            "commodity_iMETMIN",
-            "commodity_iPRECIOUSMET",
-        ],
+        exogenous_columns: list = [],
         tune: int = 500,
         chains: int = 4,
         num_draws: int = 1500,
@@ -56,8 +47,6 @@ class RandomEffectsModel(BaseModel):
             self.formula += f"(0 + {col} | {country_column})"
             if i < len(lagged_exog_columns) - 1:
                 self.formula += " + "
-
-        
 
     def fit(self, data: pd.DataFrame):
         """

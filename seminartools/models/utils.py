@@ -87,7 +87,7 @@ def make_oos_predictions(
 
     model = model_generator()
     if model.REQUIRES_ANTE_FULL_FIT:
-        print("Fitting model on the full dataset...")
+        print(f"Fitting model on the full dataset... ({model=})")
         model.full_fit(data)
         print("Fitted!")
         # New model generator returns a fitted model
@@ -188,3 +188,59 @@ def get_stats(
         ],
         index=[name for name, model_generator in model_generators],
     ).sort_values("mse")
+
+
+def _get_mse_by_country(
+    original_data: pd.DataFrame,
+    predictions: pd.DataFrame,
+    date_column: str = "date",
+    country_column: str = "country",
+):
+    """
+    Calculates the mean squared error for the predictions by country.
+    """
+    merged = predictions.merge(
+        original_data, on=[date_column, country_column], suffixes=("_pred", "_true")
+    ).dropna()
+
+    ##list of MSE for all countries
+    mse_by_country = merged.groupby(country_column).apply(
+        lambda group: mean_squared_error(group["inflation_true"], group["inflation_pred"])
+    )
+    return pd.DataFrame(mse_by_country)
+
+def get_mse_by_country(
+    model_generators: list[tuple[str, callable]],
+    data: pd.DataFrame,
+    retrain_time_series_split: TimeSeriesSplit,
+    h: int = 1,
+    num_cores_parallel_models: int = 1,
+    num_cores_parallel_splits: int = 1,
+):
+    """
+    Compares the performance of multiple models on a given dataset by computing MSE for each country.
+    """
+
+    def work_model(name, model_generator):
+        predictions = make_oos_predictions(
+            model_generator,
+            data,
+            retrain_time_series_split,
+            h=h,
+            progress=False,
+            num_cores=num_cores_parallel_splits,
+        )
+        return _get_mse_by_country(data, predictions)
+
+    df = pd.DataFrame()
+    for name, model_generator in model_generators:
+        frame = work_model(name, model_generator)
+        df = pd.concat([df,frame], axis = 1)
+    df.columns = [name for name, model_generator in model_generators]
+    return df.multiply(100^2)
+        
+
+    
+
+
+   
