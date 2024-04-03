@@ -158,7 +158,7 @@ def get_stats(
     data: pd.DataFrame,
     retrain_time_series_split: TimeSeriesSplit,
     h: int = 1,
-    num_cores_parallel_models: int = 3,
+    num_cores_parallel_models: int = 1,
     num_cores_parallel_splits: int = 5,
 ):
     """
@@ -239,8 +239,3 @@ def get_mse_by_country(
     df.columns = [name for name, model_generator in model_generators]
     return df.multiply(100^2)
         
-
-    
-
-
-   

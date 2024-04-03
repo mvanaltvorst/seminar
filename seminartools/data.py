@@ -455,8 +455,14 @@ def read_unemployment(
     return df
 
 
-def read_merged():
+def read_merged(
+        remove_countries = [],
+        only_countries = []
+):
     """
+    Args:
+        remove_countries: A list of countries to be excluded from the dataset
+        only_countries: Only consider these countries 
     Returns a merged dataframe of all the data sources.
     """
     dfs = {
@@ -476,4 +482,15 @@ def read_merged():
         dfs['commodity'],
         on='date',
     ).dropna()
+
+    if len(only_countries) != 0:
+        df = df.reset_index()
+        select = df.country.apply(lambda x : x in only_countries)
+        df = df[select].copy()
+        df.set_index(['country', 'date'])
+    elif len(remove_countries) != 0 :
+        df = df.reset_index()
+        select = df.country.apply(lambda x : x not in remove_countries)
+        df = df[select].copy()
+        df.set_index(['country', 'date'])
     return df
