@@ -6,9 +6,10 @@ from scipy.integrate import simps
 from scipy.signal import fftconvolve
 from ..utils import geo_distance
 import jax.numpy as jnp
-from jax import lax, random, jit, vmap
+from jax import lax, random, jit, vmap, pmap
 from jax.scipy.stats import norm
 from tqdm import tqdm
+from time import time
 
 # num cpu
 from multiprocessing import cpu_count
@@ -208,9 +209,29 @@ class MUCSVSSModel(BaseModel):
                 t % 4 == ((i - t0_season) % 4), lambda _: 1, lambda _: 0, None
             )
 
+        def update_deltas(delta_idx, prev_x, x, subkey):
+            """
+            Used to update the delta conditional on the seasonality indicator.
+            """
+            def true_fun(_):
+                update = prev_x[delta_idx * n : (delta_idx + 1) * n] + jnp.sqrt(
+                    self.theta
+                ) * random.normal(key=subkey, shape=(n,))
+                return x.at[delta_idx * n : (delta_idx + 1) * n].set(update)
+
+            def false_fun(_):
+                return x  # No update needed, return x as is
+
+            # Use lax.cond for JIT'able conditional execution
+            return lax.cond(
+                seas(delta_idx - 3, t), true_fun, false_fun, None
+            ) 
+
+
         def update_single_particle(prev_x, t, n, key):
             """
             Update a single particle at time t using the previous particle at time t-1.
+            Designed to be JIT'able.
             """
             x = jnp.zeros(7 * n)
             # x[n : 2 * n] = random.normal(
@@ -230,24 +251,9 @@ class MUCSVSSModel(BaseModel):
             )
 
             # deltas
-            def update_deltas(delta_idx, x, subkey):
-                def true_fun(_):
-                    update = prev_x[delta_idx * n : (delta_idx + 1) * n] + jnp.sqrt(
-                        self.theta
-                    ) * random.normal(key=subkey, shape=(n,))
-                    return x.at[delta_idx * n : (delta_idx + 1) * n].set(update)
-
-                def false_fun(_):
-                    return x  # No update needed, return x as is
-
-                # Use lax.cond for conditional execution
-                return lax.cond(
-                    seas(delta_idx - 3, t), true_fun, false_fun, None
-                )  # Operand is None since true_fun and false_fun handle the logic internally
-
             for delta_idx in [3, 4, 5, 6]:
                 key, subkey = random.split(key)
-                x = update_deltas(delta_idx, x, subkey)
+                x = update_deltas(delta_idx, prev_x, x, subkey)
 
             # restrict sum of deltas to be 0 per country
             for country_idx in range(n):
