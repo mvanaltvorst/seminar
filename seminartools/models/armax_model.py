@@ -28,6 +28,7 @@ class ARMAXModel(BaseModel):
         inflation_column: str = "inflation",
         max_p: int = 3,
         max_q: int = 3,
+        min_datapts: int = 10,
     ):
         self.criterion = criterion
         self.exogenous_columns = exogenous_columns
@@ -35,6 +36,7 @@ class ARMAXModel(BaseModel):
         self.inflation_column = inflation_column
         self.max_p = max_p
         self.max_q = max_q
+        self.min_datapts = min_datapts
 
     def fit(self, data: pd.DataFrame):
         """
@@ -51,6 +53,8 @@ class ARMAXModel(BaseModel):
             country_data.index = pd.DatetimeIndex(country_data.index).to_period(
                 "Q"
             )  # For quarterly data
+            if len(country_data) < self.min_datapts:
+                continue # not enough data to fit a model
             model, order = self._fit_model(country_data)
             self.models[country] = model
             self.orders[country] = order
@@ -123,7 +127,7 @@ class ARMAXModel(BaseModel):
         predictions = []
         for country in countries:
             if country not in self.models:
-                continue # model was not trained for this country
+                continue # model was not trained for this country. Make no predictions
             country_data = data[data[self.country_column] == country]
             country_data = country_data.set_index("date")
             prediction = self._predict_country(country_data, country)
