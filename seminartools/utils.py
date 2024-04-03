@@ -3,6 +3,8 @@ import math
 import pandas as pd
 import pycountry as pyc
 from .data import read_gdp_level
+from geopy.geocoders import Nominatim
+from geopy.distance import geodesic
 
 
 # We cache the distance matrix
@@ -15,6 +17,7 @@ def geo_distance(
     countryA: str,
     countryB: str,
     country_remap: dict[str, str] = {"Korea": "Korea, Republic of"},
+    use_geopy = False
 ) -> float:
     """
     Calculate the geographical distance between two countries.
@@ -22,6 +25,8 @@ def geo_distance(
     Parameters:
     - countryA (str): The name of the first country.
     - countryB (str): The name of the second country.
+    - use_geopy: wheter to use the geopy package. This calculates Vincenty distance
+        usefull for geopandas plotting
 
     Returns:
     - float: The geographical distance between the two countries in kilometers.
@@ -31,21 +36,30 @@ def geo_distance(
     if countryA_remapped == countryB_remapped:
         return 0 # ensures we fulfill the axioms of a metric space
 
-    countryA = pyc.countries.get(name=countryA_remapped)
-    if countryA is None:
-        raise ValueError(f"Country {countryA_remapped} not found.")
-    countryB = pyc.countries.get(name=countryB_remapped)
-    if countryB is None:
-        raise ValueError(f"Country {countryB_remapped} not found.")
+    
 
-    # Use the ISO alpha-3 country codes to find the distance.
-    row = DF_DISTANCE[
-        (DF_DISTANCE["iso_o"] == countryA.alpha_3)
-        & (DF_DISTANCE["iso_d"] == countryB.alpha_3)
-    ]
-    dist = row["dist"].item()
+    if use_geopy:
+        loc = Nominatim(user_agent="Geopy Library")
 
-    return dist
+        # entering the location name
+        getLocA = loc.geocode(countryA)
+        getLocB = loc.geocode(countryB)
+        return geodesic((getLocA.latitude, getLocA.longitude), (getLocB.latitude, getLocB.longitude)).km
+    else: 
+        countryA = pyc.countries.get(name=countryA_remapped)
+        if countryA is None:
+            raise ValueError(f"Country {countryA_remapped} not found.")
+        countryB = pyc.countries.get(name=countryB_remapped)
+        if countryB is None:
+            raise ValueError(f"Country {countryB_remapped} not found.")
+
+        # Use the ISO alpha-3 country codes to find the distance.
+        row = DF_DISTANCE[
+            (DF_DISTANCE["iso_o"] == countryA.alpha_3)
+            & (DF_DISTANCE["iso_d"] == countryB.alpha_3)
+        ]
+        dist = row["dist"].item()
+        return dist
 
 
 GDP_LEVEL_DF = read_gdp_level()
@@ -116,3 +130,48 @@ def proposal_distance(countryA: str, countryB: str, year: int, quarter: int) -> 
         )
         ** 2
     )
+
+import geopandas as gpd
+    
+def get_plot(
+    data: pd.DataFrame,
+    country_column: str = 'country',
+    europe = False,
+    coefficient_name: list = ["coefficient"],
+    legend = True,
+    include_missing = True
+
+):
+    """
+    Creates a plot of coefficients on a world map
+    Args:
+    -data: a dataframe that contains a column with country names and a column with values 
+    -country_column: names of columns that contain coefficients
+    -europe: whether to plot europe or the entire world
+    -legend: whether to include a legend
+    -coefficient_name: the name of the coefficient column
+    -include_missing: if True, missing countries will be grey, else they will be excluded
+    """
+
+    #get data of the world from geopandas
+    world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+    world = world.rename(columns = {'name': country_column}) 
+    if europe: 
+        world = world[(world.continent == 'Europe')]
+        #Drop Russia from europe data cause it looks ugly cause looks ugly
+        world = world[world['country'] != 'Russia']
+   
+    world_merged = world.merge(data, how='left', left_on= country_column, right_on = country_column)
+    
+    #return plots of all coefficients 
+    if include_missing:
+        return [world_merged.plot(column= col, cmap='OrRd', legend=legend, legend_kwds={"shrink":.5},figsize=(30,20), missing_kwds= dict(color = "lightgrey",)) for col in coefficient_name]
+    else:
+        return [world_merged.plot(column= col, cmap='OrRd', legend=legend, legend_kwds={"shrink":.5},figsize=(30,20)) for col in coefficient_name]
+
+
+
+  
+
+
+   

@@ -239,8 +239,3 @@ def get_mse_by_country(
     df.columns = [name for name, model_generator in model_generators]
     return df.multiply(100^2)
         
-
-    
-
-
-   
