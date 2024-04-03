@@ -182,7 +182,7 @@ class MUCSVSSModel(BaseModel):
 
         # Weights in log space
         #W0 = jnp.ones(self.num_particles) / self.num_particles
-        W0 = -jnp.ones(self.num_particles) * jnp.log(self.num_particles)
+        W0 = jnp.full(self.num_particles, -jnp.log(self.num_particles))
 
         # history of X's
         X = jnp.zeros((n + 1, self.num_particles, 7 * n))
@@ -219,9 +219,6 @@ class MUCSVSSModel(BaseModel):
             )
 
             # lnsepsilonsq
-            # x[2 * n : 3 * n] = random.normal(
-            #     key=key, loc=prev_x[2 * n : 3 * n], scale=jnp.sqrt(self.gamma)
-            # )
             key, subkey = random.split(key)
             x = x.at[2 * n : 3 * n].set(
                 prev_x[2 * n : 3 * n]
@@ -230,15 +227,6 @@ class MUCSVSSModel(BaseModel):
 
             # deltas
             for delta_idx in [3, 4, 5, 6]:
-                # x[delta_idx * n : (delta_idx + 1) * n] = (
-                #     random.normal(
-                #         key=key,
-                #         loc=prev_x[delta_idx * n : (delta_idx + 1) * n],
-                #         scale=jnp.sqrt(self.theta),
-                #     )
-                #     if seas(delta_idx - 3, t)
-                #     else prev_x[delta_idx * n : (delta_idx + 1) * n]
-                # )
                 if seas(delta_idx - 3, t):
                     key, subkey = random.split(key)
                     x = x.at[delta_idx * n : (delta_idx + 1) * n].set(
@@ -276,11 +264,7 @@ class MUCSVSSModel(BaseModel):
                     jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
                 )
             )
-            # x[0:n] = random.multivariate_normal(
-            #     key=key,
-            #     mean=prev_x[0:n],
-            #     cov=epsilon_cov,
-            # )
+
             key, subkey = random.split(key)
             x = x.at[0:n].set(
                 random.multivariate_normal(
@@ -303,10 +287,8 @@ class MUCSVSSModel(BaseModel):
             zip(range(1, len(self.times) + 1), self.times), total=len(self.times)
         ):
             # Step 1: predict and update
-            W = W.at[t, :].set(-jnp.ones(self.num_particles) * jnp.log(self.num_particles))
+            W = W.at[t, :].set(jnp.full(self.num_particles, -jnp.log(self.num_particles)))
 
-            # X[t, i, :] = update_particles(X[t - 1, :, :], t, n)
-            #key, subkey = random.split(key)
             subkeys = random.split(key, self.num_particles)
             X = X.at[t, :, :].set(update_particles(X[t - 1, :, :], t, n, subkeys))
 
@@ -339,25 +321,24 @@ class MUCSVSSModel(BaseModel):
             W = W.at[t, :].set(
                 W[t, :]
                 + jnp.sum(
-                    jnp.log(
-                        norm.pdf(
-                            current_timestep_data["pi"].values,
-                            loc=mean_vals,
-                            scale=scale_vals,
-                        )
+                    norm.logpdf(
+                        current_timestep_data["pi"].values,
+                        loc=mean_vals,
+                        scale=scale_vals,
                     ),
                     axis=1,
                 )
             )
-            #if jnp.sum(W[t, :]) == 0:
-                #print("WARNING: All weights are zero. Resampling will fail.")
-                #print(f"(t = {t}, corresponding_time = {corresponding_time})")
             
-            # W[t, :] = W[t, :] / jnp.sum(W[t, :])
-            #W = W.at[t, :].set(W[t, :] / jnp.sum(W[t, :]))
-            # normalize weights
-            # TODO
-            max_weight = jnp.max(W[t, :])
+            # For numerical stability, we subtract the max value from the log weights
+            max_W = jnp.max(W[t, :])
+            W = W.at[t, :].set(W[t, :] - max_W)
+            W = W.at[t, :].set(jnp.exp(W[t, :]))
+            W = W.at[t, :].set(W[t, :] / jnp.sum(W[t, :]))
+
+            if jnp.sum(W[t, :]) == 0:
+                print("WARNING: All weights are zero. Resampling will fail.")
+                print(f"(t = {t}, corresponding_time = {corresponding_time})")
 
             # Step 2: resample
             key, subkey = random.split(key)
@@ -368,7 +349,10 @@ class MUCSVSSModel(BaseModel):
                 p=W[t, :],
                 key=subkey,
             )
-            # X[t, :, :] = X[t, indices, :]
+
+            # back to log space
+            W = W.at[t, :].set(jnp.log(W[t, :]))
+
             X = X.at[t, :, :].set(X[t, indices, :])
 
         if self.aggregation_method == "median":
