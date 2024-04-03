@@ -1,4 +1,4 @@
-#import numpy as np
+# import numpy as np
 from .base_model import BaseModel
 import pandas as pd
 from scipy.stats import gaussian_kde
@@ -6,9 +6,9 @@ from scipy.integrate import simps
 from scipy.signal import fftconvolve
 from ..utils import geo_distance
 import jax.numpy as jnp
-from jax import random, jit, vmap, grad
-from jax.scipy.stats import jnorm
-from jax.scipy.linalg import cholesky
+from jax import random, jit, vmap
+from jax.scipy.stats import norm
+from tqdm import tqdm
 
 # num cpu
 from multiprocessing import cpu_count
@@ -107,14 +107,11 @@ class MUCSVSSModel(BaseModel):
         # self.stored_state_means = pd.concat(dfs, axis=0)
         self.stored_state_means = df
 
-
-
     def _run_pf(self, data: pd.DataFrame):
         """
         Run the particle filter on the data of a single country.
         """
         key = random.PRNGKey(42)
-        key, subkey = random.split(key)
 
         self.countries = data[self.country_column].unique().tolist()  # n countries
         n = len(self.countries)
@@ -127,7 +124,9 @@ class MUCSVSSModel(BaseModel):
                 for j in self.countries
             ]
         )
-        self.corr = (1.0 + jnp.sqrt(3.0) * self.corr) * jnp.exp(-jnp.sqrt(3.0) * self.corr)
+        self.corr = (1.0 + jnp.sqrt(3.0) * self.corr) * jnp.exp(
+            -jnp.sqrt(3.0) * self.corr
+        )
         self.corr = pd.DataFrame(
             self.corr, index=self.countries, columns=self.countries
         )
@@ -141,28 +140,44 @@ class MUCSVSSModel(BaseModel):
         # in total: 7 * n dimensions
 
         X0 = jnp.zeros((self.num_particles, 7 * n))
-        X0[:, 0:n] = jnp.random.normal(
-            size=(self.num_particles, n),
-            loc=self.init_tau,
-            scale=self.vague_prior_tau_sigma,
+        key, subkey = random.split(key)
+        X0 = X0.at[:, 0:n].set(
+            self.init_tau
+            + self.vague_prior_tau_sigma
+            * random.normal(
+                key=subkey,
+                shape=(self.num_particles, n),
+            )
         )
-        X0[:, n : 2 * n] = jnp.random.normal(
-            size=(self.num_particles, n),
-            loc=self.init_lnsetasq,
-            scale=self.vague_prior_lnsetasq_sigma,
+        key, subkey = random.split(key)
+        X0 = X0.at[:, n : 2 * n].set(
+            self.init_lnsetasq
+            + self.vague_prior_lnsetasq_sigma
+            * random.normal(
+                key=subkey,
+                shape=(self.num_particles, n),
+            )
         )
-        X0[:, 2 * n : 3 * n] = jnp.random.normal(
-            size=(self.num_particles, n),
-            loc=self.init_lnsepsilonsq,
-            scale=self.vague_prior_lnsepsilonsq_sigma,
+        key, subkey = random.split(key)
+        X0 = X0.at[:, 2 * n : 3 * n].set(
+            self.init_lnsepsilonsq
+            + self.vague_prior_lnsepsilonsq_sigma
+            * random.normal(
+                key=subkey,
+                shape=(self.num_particles, n),
+            )
         )
 
         # deltas
         for i in range(3, 7):
-            X0[:, i * n : (i + 1) * n] = jnp.random.normal(
-                size=(self.num_particles, n),
-                loc=self.init_delta,
-                scale=self.vague_prior_delta_sigma,
+            key, subkey = random.split(key)
+            X0 = X0.at[:, i * n : (i + 1) * n].set(
+                self.init_delta
+                + self.vague_prior_delta_sigma
+                * random.normal(
+                    key=subkey,
+                    shape=(self.num_particles, n),
+                )
             )
 
         W0 = jnp.ones(self.num_particles) / self.num_particles
@@ -170,8 +185,8 @@ class MUCSVSSModel(BaseModel):
         # history of X's
         X = jnp.zeros((n + 1, self.num_particles, 7 * n))
         W = jnp.zeros((n + 1, self.num_particles))
-        X[0, :, :] = X0
-        W[0, :] = W0
+        X = X.at[0, :, :].set(X0)
+        W = W.at[0, :].set(W0)
 
         # Seasonality indicator function
         # first we determine which modulo corresponds to Q1
@@ -187,37 +202,64 @@ class MUCSVSSModel(BaseModel):
 
             return 1 if t % 4 == ((i - t0_season) % 4) else 0
 
-        def update_single_particle(prev_x, t, i, n):
+        def update_single_particle(prev_x, t, n, key):
+            """
+            Update a single particle at time t using the previous particle at time t-1.
+            """
             x = jnp.zeros(7 * n)
-            x[t, i, n : 2 * n] = jnp.random.normal(
-                loc=X[t - 1, i, n : 2 * n], scale=jnp.sqrt(self.gamma)
+            # x[n : 2 * n] = random.normal(
+            #     key=key, loc=prev_x[n : 2 * n], scale=jnp.sqrt(self.gamma)
+            # )
+            key, subkey = random.split(key)
+            x = x.at[n : 2 * n].set(
+                prev_x[n : 2 * n]
+                + jnp.sqrt(self.gamma) * random.normal(key=subkey, shape=(n,))
             )
 
             # lnsepsilonsq
-            X[t, i, 2 * n : 3 * n] = jnp.random.normal(
-                loc=X[t - 1, i, 2 * n : 3 * n], scale=jnp.sqrt(self.gamma)
+            # x[2 * n : 3 * n] = random.normal(
+            #     key=key, loc=prev_x[2 * n : 3 * n], scale=jnp.sqrt(self.gamma)
+            # )
+            key, subkey = random.split(key)
+            x = x.at[2 * n : 3 * n].set(
+                prev_x[2 * n : 3 * n]
+                + jnp.sqrt(self.gamma) * random.normal(key=subkey, shape=(n,))
             )
 
             # deltas
             for delta_idx in [3, 4, 5, 6]:
-                X[t, i, delta_idx * n : (delta_idx + 1) * n] = (
-                    jnp.random.normal(
-                        loc=X[t - 1, i, delta_idx * n : (delta_idx + 1) * n],
-                        scale=jnp.sqrt(self.theta),
+                # x[delta_idx * n : (delta_idx + 1) * n] = (
+                #     random.normal(
+                #         key=key,
+                #         loc=prev_x[delta_idx * n : (delta_idx + 1) * n],
+                #         scale=jnp.sqrt(self.theta),
+                #     )
+                #     if seas(delta_idx - 3, t)
+                #     else prev_x[delta_idx * n : (delta_idx + 1) * n]
+                # )
+                if seas(delta_idx - 3, t):
+                    key, subkey = random.split(key)
+                    x = x.at[delta_idx * n : (delta_idx + 1) * n].set(
+                        prev_x[delta_idx * n : (delta_idx + 1) * n]
+                        + jnp.sqrt(self.theta) * random.normal(key=subkey, shape=(n,))
                     )
-                    if seas(delta_idx - 3, t)
-                    else X[t - 1, i, delta_idx * n : (delta_idx + 1) * n]
-                )
+                else:
+                    x = x.at[delta_idx * n : (delta_idx + 1) * n].set(
+                        prev_x[delta_idx * n : (delta_idx + 1) * n]
+                    )
 
             # restrict sum of deltas to be 0 per country
             for country_idx in range(n):
-                idx = [
-                    3 * n + country_idx,
-                    4 * n + country_idx,
-                    5 * n + country_idx,
-                    6 * n + country_idx,
-                ]
-                X[t, i, idx] -= jnp.mean(X[t, i, idx])
+                idx = jnp.array(
+                    [
+                        3 * n + country_idx,
+                        4 * n + country_idx,
+                        5 * n + country_idx,
+                        6 * n + country_idx,
+                    ]
+                )
+                # x[idx] -= jnp.mean(x[idx])
+                x = x.at[idx].set(x[idx] - jnp.mean(x[idx]))
 
             # add the epsilon noise
             # We calculate the covariance matrix for the multivariate normal distribution
@@ -227,74 +269,44 @@ class MUCSVSSModel(BaseModel):
                 self.corr.values
                 * jnp.outer(
                     jnp.sqrt(
-                        jnp.exp(X[t, i, 2 * n : 3 * n])
+                        jnp.exp(x[2 * n : 3 * n])
                     ),  # 2*n:3*n corresponds to lnsepsilonsq
-                    jnp.sqrt(jnp.exp(X[t, i, 2 * n : 3 * n])),
+                    jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
                 )
             )
-            X[t, i, 0:n] = random.multivariate_normal(
-                key = key,
-                mean=X[t - 1, i, 0:n],
-                cov=epsilon_cov,
+            # x[0:n] = random.multivariate_normal(
+            #     key=key,
+            #     mean=prev_x[0:n],
+            #     cov=epsilon_cov,
+            # )
+            key, subkey = random.split(key)
+            x = x.at[0:n].set(
+                random.multivariate_normal(
+                    key=subkey,
+                    mean=prev_x[0:n],
+                    cov=epsilon_cov,
+                )
             )
+            return x
 
+        update_particles = vmap(
+            update_single_particle,
+            in_axes=(0, None, None, 0),
+            out_axes=0,
+        )
 
         # History of tau + delta_1 * seas_1 + ... + delta_4 * seas_4
         etauplusdeltas = []
-        for t, corresponding_time in zip(range(1, len(self.times) + 1), self.times):
-            print("a")
+        for t, corresponding_time in tqdm(
+            zip(range(1, len(self.times) + 1), self.times), total=len(self.times)
+        ):
             # Step 1: predict and update
-            W[t, :] = jnp.ones(self.num_particles) / self.num_particles
-            for i in range(self.num_particles):
-                # lnsetasq
-                X[t, i, n : 2 * n] = jnp.random.normal(
-                    loc=X[t - 1, i, n : 2 * n], scale=jnp.sqrt(self.gamma)
-                )
+            W = W.at[t, :].set(jnp.ones(self.num_particles) / self.num_particles)
 
-                # lnsepsilonsq
-                X[t, i, 2 * n : 3 * n] = jnp.random.normal(
-                    loc=X[t - 1, i, 2 * n : 3 * n], scale=jnp.sqrt(self.gamma)
-                )
-
-                # deltas
-                for delta_idx in [3, 4, 5, 6]:
-                    X[t, i, delta_idx * n : (delta_idx + 1) * n] = (
-                        jnp.random.normal(
-                            loc=X[t - 1, i, delta_idx * n : (delta_idx + 1) * n],
-                            scale=jnp.sqrt(self.theta),
-                        )
-                        if seas(delta_idx - 3, t)
-                        else X[t - 1, i, delta_idx * n : (delta_idx + 1) * n]
-                    )
-
-                # restrict sum of deltas to be 0 per country
-                for country_idx in range(n):
-                    idx = [
-                        3 * n + country_idx,
-                        4 * n + country_idx,
-                        5 * n + country_idx,
-                        6 * n + country_idx,
-                    ]
-                    X[t, i, idx] -= jnp.mean(X[t, i, idx])
-
-                # add the epsilon noise
-                # We calculate the covariance matrix for the multivariate normal distribution
-                # by taking the outer product of the standard deviations with itself
-                # and multiplying it element-wise with the correlation matrix.
-                epsilon_cov = (
-                    self.corr.values
-                    * jnp.outer(
-                        jnp.sqrt(
-                            jnp.exp(X[t, i, 2 * n : 3 * n])
-                        ),  # 2*n:3*n corresponds to lnsepsilonsq
-                        jnp.sqrt(jnp.exp(X[t, i, 2 * n : 3 * n])),
-                    )
-                )
-                X[t, i, 0:n] = random.multivariate_normal(
-                    key = key,
-                    mean=X[t - 1, i, 0:n],
-                    cov=epsilon_cov,
-                )
+            # X[t, i, :] = update_particles(X[t - 1, :, :], t, n)
+            #key, subkey = random.split(key)
+            subkeys = random.split(key, self.num_particles)
+            X = X.at[t, :, :].set(update_particles(X[t - 1, :, :], t, n, subkeys))
 
             # Mean of pi is tau + delta_1 * seas_1 + ... + delta_4 * seas_4
             # T x n matrix
@@ -319,27 +331,37 @@ class MUCSVSSModel(BaseModel):
 
             # T x len(current_country_idxs)
             mean_vals = mean_vals[:, current_country_idxs]
-            scale_vals = scale_vals[:, current_country_idxs] 
+            scale_vals = scale_vals[:, current_country_idxs]
 
             # TODO: multivariate normal pdf
-            W[t, :] *= jnp.prod(
-                jnorm.pdf(
-                    current_timestep_data["pi"].values,
-                    loc=mean_vals,
-                    scale=scale_vals,
-                ),
-                axis=1,
+            W = W.at[t, :].set(
+                W[t, :]
+                * jnp.prod(
+                    norm.pdf(
+                        current_timestep_data["pi"].values,
+                        loc=mean_vals,
+                        scale=scale_vals,
+                    ),
+                    axis=1,
+                )
             )
             if jnp.sum(W[t, :]) == 0:
                 print("WARNING: All weights are zero. Resampling will fail.")
                 print(f"(t = {t}, corresponding_time = {corresponding_time})")
-            W[t, :] = W[t, :] / jnp.sum(W[t, :])
+            # W[t, :] = W[t, :] / jnp.sum(W[t, :])
+            W = W.at[t, :].set(W[t, :] / jnp.sum(W[t, :]))
 
             # Step 2: resample
-            indices = jnp.random.choice(
-                self.num_particles, size=self.num_particles, replace=True, p=W[t, :]
+            key, subkey = random.split(key)
+            indices = random.choice(
+                a=self.num_particles,
+                shape=(self.num_particles,),
+                replace=True,
+                p=W[t, :],
+                key=subkey,
             )
-            X[t, :, :] = X[t, indices, :]
+            # X[t, :, :] = X[t, indices, :]
+            X = X.at[t, :, :].set(X[t, indices, :])
 
         if self.aggregation_method == "median":
             out = pd.DataFrame(
@@ -348,7 +370,9 @@ class MUCSVSSModel(BaseModel):
                     "etau": jnp.median(X[1:, :, 0:n], axis=1)
                     / 100,  # convert back to percentage
                     "etauplusdeltas": etauplusdeltas,  # TODO
-                    "elnsetasq": jnp.median(X[1:, :, n : 2 * n], axis=1),  # OTHER SCALE!
+                    "elnsetasq": jnp.median(
+                        X[1:, :, n : 2 * n], axis=1
+                    ),  # OTHER SCALE!
                     "esigmaeta": jnp.median(
                         jnp.sqrt(jnp.exp(X[1:, :, n : 2 * n])), axis=1
                     ),
@@ -364,9 +388,6 @@ class MUCSVSSModel(BaseModel):
                     # "inflation": data["inflation"].values,
                     "inflation": data.groupby(self.date_column)[self.inflation_column]
                     .median()
-                    .unstack()
-                    .reindex(self.times, axis=0)
-                    .reindex(self.countries, axis=1)
                     .values,
                     "country": jnp.repeat(self.countries, len(self.times)),
                 }
@@ -416,7 +437,7 @@ class MUCSVSSModel(BaseModel):
                 }
             )
 
-        #out[self.country_column] = data[self.country_column].iloc[0]
+        # out[self.country_column] = data[self.country_column].iloc[0]
 
         return out.set_index([self.country_column, self.date_column])
 
