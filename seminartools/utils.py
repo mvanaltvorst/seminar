@@ -28,6 +28,8 @@ def geo_distance(
     """
     countryA_remapped = country_remap.get(countryA, countryA)
     countryB_remapped = country_remap.get(countryB, countryB)
+    if countryA_remapped == countryB_remapped:
+        return 0 # ensures we fulfill the axioms of a metric space
 
     countryA = pyc.countries.get(name=countryA_remapped)
     if countryA is None:

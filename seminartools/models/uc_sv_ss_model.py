@@ -49,12 +49,6 @@ class UCSVSSModel(BaseModel):
 
         self.gamma = GAMMA
 
-        # No stochastic seasonality is equivalent to theta = 0
-        if stochastic_seasonality:
-            self.theta = THETA
-        else:
-            self.theta = 0
-
         self.init_lnsetasq = INIT_LNSETASQ
         self.init_lnsepsilonsq = INIT_LNSEPSILONSQ
         self.init_delta = INIT_DELTA
@@ -62,10 +56,15 @@ class UCSVSSModel(BaseModel):
 
         self.vague_prior_lnsetasq_sigma = VAGUE_PRIOR_LNSETASQ_SIGMA
         self.vague_prior_lnsepsilonsq_sigma = VAGUE_PRIOR_LNSEPSILONSQ_SIGMA
+
+        # No stochastic seasonality is equivalent to theta = 0 and no prior variance in delta
         if stochastic_seasonality:
+            self.theta = THETA
             self.vague_prior_delta_sigma = VAGUE_PRIOR_DELTA_SIGMA
         else:
             self.vague_prior_delta_sigma = 0
+            self.theta = 0
+
         self.vague_prior_tau_sigma = VAGUE_PRIOR_TAU_SIGMA
 
     def fit(self, data: pd.DataFrame):
@@ -74,7 +73,8 @@ class UCSVSSModel(BaseModel):
         Preferably, fit once on the entire dataset using `run_pf` and then
         figure out the historical predictions using the historical particles.
         """
-        pass
+        if not hasattr(self, "stored_state_means"):
+            raise ValueError("Model has not been `run_pf`'d yet.")
 
     def full_fit(self, data: pd.DataFrame, aggregation_method : str = "median"):
         """
