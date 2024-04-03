@@ -42,6 +42,9 @@ class RandomEffectsModel(BaseModel):
             for i in range(1, lags + 1)
             for col in exogenous_columns + [target_column]
         ]
+
+        self.regression_columns = lagged_exog_columns
+
         # self.formula += " + ".join(lagged_exog_columns)
         for i, col in enumerate(lagged_exog_columns):
             self.formula += f"(0 + {col} | {country_column})"
@@ -73,6 +76,15 @@ class RandomEffectsModel(BaseModel):
 
         # Drop rows with NaNs due to lagged variables
         data = data.dropna()
+
+        # Normalize
+        self.feature_means = data[self.regression_columns].mean()
+        self.feature_stds = data[self.regression_columns].std()
+        self.target_mean = data[self.target_column].mean()
+        self.target_std = data[self.target_column].std()
+
+        data[self.regression_columns] = (data[self.regression_columns] - self.feature_means) / self.feature_stds
+        data[self.target_column] = (data[self.target_column] - self.target_mean) / self.target_std
 
         # Fit the model
         self.model = bmb.Model(self.formula, data=data)
@@ -111,6 +123,9 @@ class RandomEffectsModel(BaseModel):
         data = self._create_lagged_variables(data)
         data = data.dropna()
 
+        #normalize
+        data[self.regression_columns] = (data[self.regression_columns] - self.feature_means) / self.feature_stds
+
         # Predict using the model that was fit
         predictions = self.model.predict(
             self.results, data=data, inplace=False, sample_new_groups=True
@@ -143,6 +158,9 @@ class RandomEffectsModel(BaseModel):
                 predictions.index.get_level_values(1),
             )
         )
+
+        #deNormalize
+        predictions.inflation = predictions.inflation * self.target_std + self.target_mean
 
         return predictions.reset_index().rename(
             columns={"level_0": self.date_column, "level_1": self.country_column}
