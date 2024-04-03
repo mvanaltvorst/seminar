@@ -180,7 +180,9 @@ class MUCSVSSModel(BaseModel):
                 )
             )
 
-        W0 = jnp.ones(self.num_particles) / self.num_particles
+        # Weights in log space
+        #W0 = jnp.ones(self.num_particles) / self.num_particles
+        W0 = -jnp.ones(self.num_particles) * jnp.log(self.num_particles)
 
         # history of X's
         X = jnp.zeros((n + 1, self.num_particles, 7 * n))
@@ -301,7 +303,7 @@ class MUCSVSSModel(BaseModel):
             zip(range(1, len(self.times) + 1), self.times), total=len(self.times)
         ):
             # Step 1: predict and update
-            W = W.at[t, :].set(jnp.ones(self.num_particles) / self.num_particles)
+            W = W.at[t, :].set(-jnp.ones(self.num_particles) * jnp.log(self.num_particles))
 
             # X[t, i, :] = update_particles(X[t - 1, :, :], t, n)
             #key, subkey = random.split(key)
@@ -336,20 +338,26 @@ class MUCSVSSModel(BaseModel):
             # TODO: multivariate normal pdf
             W = W.at[t, :].set(
                 W[t, :]
-                * jnp.prod(
-                    norm.pdf(
-                        current_timestep_data["pi"].values,
-                        loc=mean_vals,
-                        scale=scale_vals,
+                + jnp.sum(
+                    jnp.log(
+                        norm.pdf(
+                            current_timestep_data["pi"].values,
+                            loc=mean_vals,
+                            scale=scale_vals,
+                        )
                     ),
                     axis=1,
                 )
             )
-            if jnp.sum(W[t, :]) == 0:
-                print("WARNING: All weights are zero. Resampling will fail.")
-                print(f"(t = {t}, corresponding_time = {corresponding_time})")
+            #if jnp.sum(W[t, :]) == 0:
+                #print("WARNING: All weights are zero. Resampling will fail.")
+                #print(f"(t = {t}, corresponding_time = {corresponding_time})")
+            
             # W[t, :] = W[t, :] / jnp.sum(W[t, :])
-            W = W.at[t, :].set(W[t, :] / jnp.sum(W[t, :]))
+            #W = W.at[t, :].set(W[t, :] / jnp.sum(W[t, :]))
+            # normalize weights
+            # TODO
+            max_weight = jnp.max(W[t, :])
 
             # Step 2: resample
             key, subkey = random.split(key)
