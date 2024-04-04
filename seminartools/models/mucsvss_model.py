@@ -1,18 +1,15 @@
-# import numpy as np
 from .base_model import BaseModel
 import pandas as pd
 from scipy.stats import gaussian_kde
 from scipy.integrate import simps
 from scipy.signal import fftconvolve
 from ..utils import geo_distance
+import numpy as np
 import jax.numpy as jnp
-from jax import lax, random, jit, vmap, pmap
+from jax import lax, random, jit, vmap, pmap, device_count
 from jax.scipy.stats import norm
 from tqdm import tqdm
-from time import time
-
-# num cpu
-from multiprocessing import cpu_count
+import jax
 
 # nu follows a normal distribution with variance gamma
 GAMMA = 0.2
@@ -29,8 +26,6 @@ VAGUE_PRIOR_LNSETASQ_SIGMA = 3
 VAGUE_PRIOR_LNSEPSILONSQ_SIGMA = 3
 VAGUE_PRIOR_DELTA_SIGMA = 1
 VAGUE_PRIOR_TAU_SIGMA = 1
-
-N_CORES = cpu_count()
 
 
 # Multivariate Unobserved Component Stochastic Volatility Stochastic Seasonality Particle Filter
@@ -85,6 +80,12 @@ class MUCSVSSModel(BaseModel):
 
         self.vague_prior_tau_sigma = VAGUE_PRIOR_TAU_SIGMA
 
+        self.n_devices = device_count()
+        self.n_particles_per_device = self.num_particles // self.n_devices
+        assert (
+            self.num_particles % self.n_devices == 0
+        ), "Total particles must be divisible by the number of devices."
+
     def fit(self, data: pd.DataFrame):
         """
         This model is not meant to be fitted to data every iteration using this method.
@@ -108,37 +109,32 @@ class MUCSVSSModel(BaseModel):
         # self.stored_state_means = pd.concat(dfs, axis=0)
         self.stored_state_means = df
 
-    def _run_pf(self, data: pd.DataFrame):
+    def _construct_corr_matrix(self, countries: list[str]) -> pd.DataFrame:
         """
-        Run the particle filter on the data of a single country.
+        Construct the correlation matrix based on the distance function.
         """
-        key = random.PRNGKey(42)
-
-        self.countries = data[self.country_column].unique().tolist()  # n countries
-        n = len(self.countries)
-        self.times = sorted(data[self.date_column].unique().tolist())  # T timesteps
-
         # we need to make a correlation matrix
-        self.corr = jnp.array(
+        corr = np.array(
             [
                 [self.distance_function(i, j) for i in self.countries]
                 for j in self.countries
             ]
         )
-        self.corr = (1.0 + jnp.sqrt(3.0) * self.corr) * jnp.exp(
-            -jnp.sqrt(3.0) * self.corr
-        )
-        self.corr = pd.DataFrame(
-            self.corr, index=self.countries, columns=self.countries
+        corr = (1.0 + np.sqrt(3.0) * corr) * np.exp(-np.sqrt(3.0) * corr)
+        corr = pd.DataFrame(corr, index=self.countries, columns=self.countries)
+        return pd.DataFrame(
+            [[self.distance_function(i, j) for i in countries] for j in countries],
+            index=countries,
+            columns=countries,
         )
 
-        # pi = data[self.inflation_column].values * 100
-        data["pi"] = data[self.inflation_column] * 100
-
-        # Initial Particles
-        # OLD UNIVARIATE: [tau, lnsetasq, lnsepsilonsq, delta1, delta2, delta3, delta4]
-        # NEW MULTIVARIATE: [tau_{1,...,n}, lnsetasq_{1,...,n}, lnsepsilonsq_{1,...,n}, delta1_{1,...,n}, delta2_{1,...,n}, delta3_{1,...,n}, delta4_{1,...,n}]
-        # in total: 7 * n dimensions
+    def _construct_initial_X_W(self, key: random.PRNGKey, n: int, T: int):
+        """
+        Construct the initial particles and weights.
+        OLD UNIVARIATE: [tau, lnsetasq, lnsepsilonsq, delta1, delta2, delta3, delta4]
+        NEW MULTIVARIATE: [tau_{1,...,n}, lnsetasq_{1,...,n}, lnsepsilonsq_{1,...,n}, delta1_{1,...,n}, delta2_{1,...,n}, delta3_{1,...,n}, delta4_{1,...,n}]
+        in total: 7 * n dimensions
+        """
 
         X0 = jnp.zeros((self.num_particles, 7 * n))
         key, subkey = random.split(key)
@@ -189,116 +185,171 @@ class MUCSVSSModel(BaseModel):
         W = jnp.zeros((n + 1, self.num_particles))
         X = X.at[0, :, :].set(X0)
         W = W.at[0, :].set(W0)
+        return X, W
+
+    @staticmethod
+    def _seas(i, t, t0_season):
+        """
+        = 1 iff timestamp t corresponds to season i
+        season 0: Q1
+        ...
+        season 3: Q4
+        """
+
+        # return 1 if t % 4 == ((i - t0_season) % 4) else 0
+
+        # Using lax.cond for JIT-compatible conditional logic
+        return lax.cond(t % 4 == ((i - t0_season) % 4), lambda _: 1, lambda _: 0, None)
+
+    @staticmethod
+    def _update_deltas(delta_idx, prev_x, x, t, n, theta, t0_season, key):
+        """
+        Used to update the delta conditional on the seasonality indicator.
+        """
+
+        def true_fun(_):
+            update = prev_x[delta_idx * n : (delta_idx + 1) * n] + jnp.sqrt(
+                theta
+            ) * random.normal(key=key, shape=(n,))
+            return x.at[delta_idx * n : (delta_idx + 1) * n].set(update)
+
+        def false_fun(_):
+            return x  # No update needed, return x as is
+
+        # Use lax.cond for JIT'able conditional execution
+        return lax.cond(
+            MUCSVSSModel._seas(i=delta_idx - 3, t=t, t0_season=t0_season),
+            true_fun,
+            false_fun,
+            None,
+        )
+
+    @staticmethod
+    def _hashable_array_signature(array):
+        # Compute a hash of the array's contents. Note: this is simplified for demonstration.
+        content_hash = hash(array.tobytes())
+        # Combine the shape and content hash into a single, hashable signature
+        return (array.shape, content_hash)
+
+    @staticmethod
+    def _update_single_particle(
+        prev_x, t, n, gamma, theta, t0_season, corr_values, key
+    ):
+        """
+        Update a single particle at time t using the previous particle at time t-1.
+        Designed to be JIT'able.
+        """
+        x = jnp.zeros(7 * n)
+        key, subkey = random.split(key)
+        x = x.at[n : 2 * n].set(
+            prev_x[n : 2 * n] + jnp.sqrt(gamma) * random.normal(key=subkey, shape=(n,))
+        )
+
+        # lnsepsilonsq
+        key, subkey = random.split(key)
+        x = x.at[2 * n : 3 * n].set(
+            prev_x[2 * n : 3 * n]
+            + jnp.sqrt(gamma) * random.normal(key=subkey, shape=(n,))
+        )
+
+        # deltas
+        for delta_idx in [3, 4, 5, 6]:
+            key, subkey = random.split(key)
+            x = MUCSVSSModel._update_deltas(
+                delta_idx=delta_idx,
+                prev_x=prev_x,
+                x=x,
+                t=t,
+                n=n,
+                theta=theta,
+                t0_season=t0_season,
+                key=subkey,
+            )
+
+        # restrict sum of deltas to be 0 per country
+        for country_idx in range(n):
+            idx = jnp.array(
+                [
+                    3 * n + country_idx,
+                    4 * n + country_idx,
+                    5 * n + country_idx,
+                    6 * n + country_idx,
+                ]
+            )
+            # x[idx] -= jnp.mean(x[idx])
+            x = x.at[idx].set(x[idx] - jnp.mean(x[idx]))
+
+        # add the epsilon noise
+        # We calculate the covariance matrix for the multivariate normal distribution
+        # by taking the outer product of the standard deviations with itself
+        # and multiplying it element-wise with the correlation matrix.
+        epsilon_cov = (
+            corr_values
+            * jnp.outer(
+                jnp.sqrt(
+                    jnp.exp(x[2 * n : 3 * n])
+                ),  # 2*n:3*n corresponds to lnsepsilonsq
+                jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
+            )
+        )
+
+        # final use of key
+        x = x.at[0:n].set(
+            random.multivariate_normal(
+                key=key,
+                mean=prev_x[0:n],
+                cov=epsilon_cov,
+            )
+        )
+        return x
+
+    def _run_pf(self, data: pd.DataFrame):
+        """
+        Run the particle filter on the data of a single country.
+        """
+        key = random.PRNGKey(42)
+
+        self.countries = data[self.country_column].unique().tolist()  # n countries
+        n = len(self.countries)
+        self.times = sorted(data[self.date_column].unique().tolist())  # T timesteps
+
+        self.corr = self._construct_corr_matrix(self.countries)
+
+        # pi = data[self.inflation_column].values * 100
+        data["pi"] = data[self.inflation_column] * 100
+
+        key, subkey = random.split(key)
+        X, W = self._construct_initial_X_W(subkey, n, len(self.times))
+        # X: T x particles x 7*n
+        # W: T x particles
 
         # Seasonality indicator function
-        # first we determine which modulo corresponds to Q1
+        # we determine which modulo corresponds to Q1
         t0_season = (self.times[0].month - 1) // 3
 
-        def seas(i, t):
-            """
-            = 1 iff timestamp t corresponds to season i
-            season 0: Q1
-            ...
-            season 3: Q4
-            """
+        # update_particles = jit(
+        #     vmap(
+        #         update_single_particle,
+        #         in_axes=(0, None, None, 0),
+        #         out_axes=0,
+        #     ),
+        #     static_argnums=(2,),
+        # )
 
-            # return 1 if t % 4 == ((i - t0_season) % 4) else 0
-
-            # Using lax.cond for JIT-compatible conditional logic
-            return lax.cond(
-                t % 4 == ((i - t0_season) % 4), lambda _: 1, lambda _: 0, None
-            )
-
-        def update_deltas(delta_idx, prev_x, x, subkey):
-            """
-            Used to update the delta conditional on the seasonality indicator.
-            """
-            def true_fun(_):
-                update = prev_x[delta_idx * n : (delta_idx + 1) * n] + jnp.sqrt(
-                    self.theta
-                ) * random.normal(key=subkey, shape=(n,))
-                return x.at[delta_idx * n : (delta_idx + 1) * n].set(update)
-
-            def false_fun(_):
-                return x  # No update needed, return x as is
-
-            # Use lax.cond for JIT'able conditional execution
-            return lax.cond(
-                seas(delta_idx - 3, t), true_fun, false_fun, None
-            ) 
-
-
-        def update_single_particle(prev_x, t, n, key):
-            """
-            Update a single particle at time t using the previous particle at time t-1.
-            Designed to be JIT'able.
-            """
-            x = jnp.zeros(7 * n)
-            # x[n : 2 * n] = random.normal(
-            #     key=key, loc=prev_x[n : 2 * n], scale=jnp.sqrt(self.gamma)
-            # )
-            key, subkey = random.split(key)
-            x = x.at[n : 2 * n].set(
-                prev_x[n : 2 * n]
-                + jnp.sqrt(self.gamma) * random.normal(key=subkey, shape=(n,))
-            )
-
-            # lnsepsilonsq
-            key, subkey = random.split(key)
-            x = x.at[2 * n : 3 * n].set(
-                prev_x[2 * n : 3 * n]
-                + jnp.sqrt(self.gamma) * random.normal(key=subkey, shape=(n,))
-            )
-
-            # deltas
-            for delta_idx in [3, 4, 5, 6]:
-                key, subkey = random.split(key)
-                x = update_deltas(delta_idx, prev_x, x, subkey)
-
-            # restrict sum of deltas to be 0 per country
-            for country_idx in range(n):
-                idx = jnp.array(
-                    [
-                        3 * n + country_idx,
-                        4 * n + country_idx,
-                        5 * n + country_idx,
-                        6 * n + country_idx,
-                    ]
-                )
-                # x[idx] -= jnp.mean(x[idx])
-                x = x.at[idx].set(x[idx] - jnp.mean(x[idx]))
-
-            # add the epsilon noise
-            # We calculate the covariance matrix for the multivariate normal distribution
-            # by taking the outer product of the standard deviations with itself
-            # and multiplying it element-wise with the correlation matrix.
-            epsilon_cov = (
-                self.corr.values
-                * jnp.outer(
-                    jnp.sqrt(
-                        jnp.exp(x[2 * n : 3 * n])
-                    ),  # 2*n:3*n corresponds to lnsepsilonsq
-                    jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
-                )
-            )
-
-            key, subkey = random.split(key)
-            x = x.at[0:n].set(
-                random.multivariate_normal(
-                    key=subkey,
-                    mean=prev_x[0:n],
-                    cov=epsilon_cov,
-                )
-            )
-            return x
-
-        update_particles = jit(
-            vmap(
-                update_single_particle,
-                in_axes=(0, None, None, 0),
-                out_axes=0,
-            ),
-            static_argnums=(2,),
+        # jit_update_single_particle = jit(update_single_particle, static_argnums=(3,))
+        # Wrapper function that uses vmap to vectorize update_single_particle over particles in a shard
+        # We broadcast everything except the particles and keys
+        update_particles_shard = vmap(
+            MUCSVSSModel._update_single_particle,
+            in_axes=(0, None, None, None, None, None, None, 0),
+            out_axes=0,
+        )
+        # pmap to parallelize over devices
+        # n, self.gamma, self.theta, t0_season, self.corr.values are always constant
+        update_particles_parallel = pmap(
+            update_particles_shard,
+            in_axes=(0, None, None, None, None, None, None, 0),
+            static_broadcasted_argnums=(2, 3, 4, 5),
         )
 
         # History of tau + delta_1 * seas_1 + ... + delta_4 * seas_4
@@ -312,16 +363,34 @@ class MUCSVSSModel(BaseModel):
             )
 
             subkeys = random.split(key, self.num_particles)
-            X = X.at[t, :, :].set(update_particles(X[t - 1, :, :], t, n, subkeys))
+            # Old: simple vmap update_particles
+            # X = X.at[t, :, :].set(update_particles(X[t - 1, :, :], t, n, subkeys))
+            subkeys_reshaped = subkeys.reshape(
+                self.n_devices, self.n_particles_per_device, -1
+            )
+            Xt_reshaped = X[t, :, :].reshape(
+                self.n_devices, self.n_particles_per_device, -1
+            )
+            X_updated = update_particles_parallel(
+                Xt_reshaped,
+                t,
+                n,
+                self.gamma,
+                self.theta,
+                t0_season,
+                self.corr.values,
+                subkeys_reshaped,
+            )
+            X = X.at[t, :, :].set(X_updated.reshape(self.num_particles, 7 * n))
 
             # Mean of pi is tau + delta_1 * seas_1 + ... + delta_4 * seas_4
             # T x n matrix
             mean_vals = (
                 X[t, :, 0:n]
-                + X[t, :, 3 * n : 4 * n] * seas(0, t)
-                + X[t, :, 4 * n : 5 * n] * seas(1, t)
-                + X[t, :, 5 * n : 6 * n] * seas(2, t)
-                + X[t, :, 6 * n : 7 * n] * seas(3, t)
+                + X[t, :, 3 * n : 4 * n] * MUCSVSSModel._seas(0, t, t0_season)
+                + X[t, :, 4 * n : 5 * n] * MUCSVSSModel._seas(1, t, t0_season)
+                + X[t, :, 5 * n : 6 * n] * MUCSVSSModel._seas(2, t, t0_season)
+                + X[t, :, 6 * n : 7 * n] * MUCSVSSModel._seas(3, t, t0_season)
             )
             etauplusdeltas.append(jnp.mean(mean_vals, axis=0))
             scale_vals = jnp.sqrt(
