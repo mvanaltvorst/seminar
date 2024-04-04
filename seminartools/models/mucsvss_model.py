@@ -10,6 +10,7 @@ from jax import lax, random, jit, vmap, pmap, device_count
 from jax.scipy.stats import norm
 from tqdm import tqdm
 import jax
+from time import time
 
 # nu follows a normal distribution with variance gamma
 GAMMA = 0.2
@@ -107,7 +108,7 @@ class MUCSVSSModel(BaseModel):
         # )
         df = self._run_pf(data)
         # self.stored_state_means = pd.concat(dfs, axis=0)
-        self.stored_state_means = df
+        self.stored_state_means = df.astype("float")
 
     def _construct_corr_matrix(self, countries: list[str]) -> pd.DataFrame:
         """
@@ -122,11 +123,7 @@ class MUCSVSSModel(BaseModel):
         )
         corr = (1.0 + np.sqrt(3.0) * corr) * np.exp(-np.sqrt(3.0) * corr)
         corr = pd.DataFrame(corr, index=self.countries, columns=self.countries)
-        return pd.DataFrame(
-            [[self.distance_function(i, j) for i in countries] for j in countries],
-            index=countries,
-            columns=countries,
-        )
+        return corr
 
     def _construct_initial_X_W(self, key: random.PRNGKey, n: int, T: int):
         """
@@ -181,8 +178,8 @@ class MUCSVSSModel(BaseModel):
         W0 = jnp.full(self.num_particles, -jnp.log(self.num_particles))
 
         # history of X's
-        X = jnp.zeros((n + 1, self.num_particles, 7 * n))
-        W = jnp.zeros((n + 1, self.num_particles))
+        X = jnp.zeros((T + 1, self.num_particles, 7 * n))
+        W = jnp.zeros((T + 1, self.num_particles))
         X = X.at[0, :, :].set(X0)
         W = W.at[0, :].set(W0)
         return X, W
@@ -224,8 +221,6 @@ class MUCSVSSModel(BaseModel):
             None,
         )
 
-
-
     def _run_pf(self, data: pd.DataFrame):
         """
         Run the particle filter on the data of a single country.
@@ -261,9 +256,7 @@ class MUCSVSSModel(BaseModel):
 
         corr_values = self.corr.values
 
-        def _update_single_particle(
-            prev_x, t, key
-        ):
+        def _update_single_particle(prev_x, t, key):
             """
             Update a single particle at time t using the previous particle at time t-1.
             Designed to be JIT'able.
@@ -271,7 +264,8 @@ class MUCSVSSModel(BaseModel):
             x = jnp.zeros(7 * n)
             key, subkey = random.split(key)
             x = x.at[n : 2 * n].set(
-                prev_x[n : 2 * n] + jnp.sqrt(self.gamma) * random.normal(key=subkey, shape=(n,))
+                prev_x[n : 2 * n]
+                + jnp.sqrt(self.gamma) * random.normal(key=subkey, shape=(n,))
             )
 
             # lnsepsilonsq
@@ -363,7 +357,9 @@ class MUCSVSSModel(BaseModel):
 
         jit_get_XTminus1_subkeys_reshaped = jit(get_XTminus1_subkeys_reshaped)
 
-        def update_X_W(X, W, X_updated, current_country_idxs, t, key):
+        def update_X_W(
+            X, W, X_updated, current_country_idxs, t, current_timestep_pi_values, key
+        ):
             X = X.at[t, :, :].set(X_updated.reshape(self.num_particles, 7 * n))
             # Mean of pi is tau + delta_1 * seas_1 + ... + delta_4 * seas_4
             # T x n matrix
@@ -375,6 +371,7 @@ class MUCSVSSModel(BaseModel):
                 + X[t, :, 6 * n : 7 * n] * MUCSVSSModel._seas(3, t, t0_season)
             )
             etauplusdeltas_element = jnp.mean(mean_vals, axis=0)
+
             scale_vals = jnp.sqrt(
                 jnp.exp(X[t, :, n : 2 * n])
             )  # n:2*n corresponds to lnsetasq
@@ -383,14 +380,13 @@ class MUCSVSSModel(BaseModel):
             # T x len(current_country_idxs)
             mean_vals = mean_vals[:, current_country_idxs]
             scale_vals = scale_vals[:, current_country_idxs]
-            #return X, etauplusdeltas_element, mean_vals, scale_vals
+            # return X, etauplusdeltas_element, mean_vals, scale_vals
 
             # TODO: multivariate normal pdf
-            W = W.at[t, :].set(
-                W[t, :]
-                + jnp.sum(
+            W = W.at[t, :].add(
+                jnp.sum(
                     norm.logpdf(
-                        current_timestep_data["pi"].values,
+                        current_timestep_pi_values,
                         loc=mean_vals,
                         scale=scale_vals,
                     ),
@@ -400,8 +396,7 @@ class MUCSVSSModel(BaseModel):
 
             # For numerical stability, we subtract the max value from the log weights
             max_W = jnp.max(W[t, :])
-            W = W.at[t, :].set(W[t, :] - max_W)
-            W = W.at[t, :].set(jnp.exp(W[t, :]))
+            W = W.at[t, :].set(jnp.exp(W[t, :] - max_W))
             W = W.at[t, :].set(W[t, :] / jnp.sum(W[t, :]))
 
             # if jnp.sum(W[t, :]) == 0:
@@ -409,19 +404,19 @@ class MUCSVSSModel(BaseModel):
             #     print(f"(t = {t}, corresponding_time = {corresponding_time})")
 
             # Step 2: resample
-            key, subkey = random.split(key)
+            # last use of key
             indices = random.choice(
                 a=self.num_particles,
                 shape=(self.num_particles,),
                 replace=True,
                 p=W[t, :],
-                key=subkey,
+                key=key,
             )
+            X = X.at[t, :, :].set(X[t, indices, :])
 
             # back to log space
             W = W.at[t, :].set(jnp.log(W[t, :]))
 
-            X = X.at[t, :, :].set(X[t, indices, :])
             return X, W, etauplusdeltas_element
 
         jit_update_X_W = jit(update_X_W)
@@ -458,40 +453,82 @@ class MUCSVSSModel(BaseModel):
                 t,
                 subkeys_reshaped,
             )
+            # jax.debug.print("X_updated: {x}", x = X_updated)
+            # jax.debug.print("0:n: {x}", x = jnp.isnan(X_updated[:, :, 0:n]).any())
+            # jax.debug.print("n:2n: {x}", x = jnp.isnan(X_updated[:, :, n:2*n]).any())
+            # jax.debug.print("2n:3n: {x}", x = jnp.isnan(X_updated[:, :, 2*n:3*n]).any())
+            # jax.debug.print("3n:4n: {x}", x = jnp.isnan(X_updated[:, :, 3*n:4*n]).any())
+            # jax.debug.print("4n:5n: {x}", x = jnp.isnan(X_updated[:, :, 4*n:5*n]).any())
+            # jax.debug.print("5n:6n: {x}", x = jnp.isnan(X_updated[:, :, 5*n:6*n]).any())
+            # jax.debug.print("6n:7n: {x}", x = jnp.isnan(X_updated[:, :, 6*n:7*n]).any())
+
+            # break
             key, subkey = random.split(key)
 
-            X, W, etauplusdeltas_element = jit_update_X_W(X, W, X_updated, current_country_idxs, t, subkey)
+            X, W, etauplusdeltas_element = jit_update_X_W(
+                X,
+                W,
+                X_updated,
+                current_country_idxs,
+                t,
+                current_timestep_data["pi"].values,
+                subkey,
+            )
+
             etauplusdeltas.append(etauplusdeltas_element)
 
         if self.aggregation_method == "median":
-            out = pd.DataFrame(
-                {
-                    "date": self.times,
-                    "etau": jnp.median(X[1:, :, 0:n], axis=1)
-                    / 100,  # convert back to percentage
-                    "etauplusdeltas": etauplusdeltas,  # TODO
-                    "elnsetasq": jnp.median(
-                        X[1:, :, n : 2 * n], axis=1
-                    ),  # OTHER SCALE!
-                    "esigmaeta": jnp.median(
-                        jnp.sqrt(jnp.exp(X[1:, :, n : 2 * n])), axis=1
-                    ),
-                    "elnsepsilonsq": jnp.median(X[1:, :, 2 * n : 3 * n], axis=1),
-                    "esigmaepsilon": jnp.median(
-                        jnp.sqrt(jnp.exp(X[1:, :, 2 * n : 3 * n])), axis=1
-                    ),
-                    "edelta1": jnp.median(X[1:, :, 3 * n : 4 * n], axis=1) / 100,
-                    "edelta2": jnp.median(X[1:, :, 4 * n : 4 * n], axis=1) / 100,
-                    "edelta3": jnp.median(X[1:, :, 5 * n : 6 * n], axis=1) / 100,
-                    "edelta4": jnp.median(X[1:, :, 6 * n : 7 * n], axis=1) / 100,
-                    "meff": 1 / jnp.sum(W[1:, :] ** 2, axis=1),
-                    # "inflation": data["inflation"].values,
-                    "inflation": data.groupby(self.date_column)[self.inflation_column]
-                    .median()
-                    .values,
-                    "country": jnp.repeat(jnp.array(self.countries), len(self.times)),
-                }
-            )
+            out = []
+            for country_idx, country in enumerate(self.countries):
+                out.append(
+                    pd.DataFrame(
+                        {
+                            "date": self.times,
+                            "etau": jnp.median(X[1:, :, country_idx], axis=1)  # 0:n
+                            / 100,  # convert back to percentage
+                            "etauplusdeltas": [x[country_idx] for x in etauplusdeltas],
+                            "elnsetasq": jnp.median(
+                                X[1:, :, n + country_idx],
+                                axis=1,  # n:2*n
+                            ),  # OTHER SCALE!
+                            "esigmaeta": jnp.median(
+                                jnp.sqrt(jnp.exp(X[1:, :, n + country_idx])),
+                                axis=1,  # n:2*n
+                            ),
+                            "elnsepsilonsq": jnp.median(
+                                X[1:, :, 2 * n + country_idx],
+                                axis=1,  # 2*n:3*n
+                            ),
+                            "esigmaepsilon": jnp.median(
+                                jnp.sqrt(jnp.exp(X[1:, :, 2 * n + country_idx])),
+                                axis=1,  # 2*n:3*n
+                            ),
+                            "edelta1": jnp.median(
+                                X[1:, :, 3 * n + country_idx], axis=1
+                            )  # 3*n:4*n
+                            / 100,
+                            "edelta2": jnp.median(
+                                X[1:, :, 4 * n + country_idx], axis=1
+                            )  # 4*n:5*n
+                            / 100,
+                            "edelta3": jnp.median(
+                                X[1:, :, 5 * n + country_idx], axis=1
+                            )  # 5*n:6*n
+                            / 100,
+                            "edelta4": jnp.median(
+                                X[1:, :, 6 * n + country_idx], axis=1
+                            )  # 6*n:7*n
+                            / 100,
+                            "meff": 1 / jnp.sum(W[1:, :] ** 2, axis=1),
+                            # "inflation": data["inflation"].values,
+                            "inflation": data[data[self.country_column] == country][
+                                "inflation"
+                            ].values,
+                            "country": country,
+                        }
+                    )
+                )
+            out = pd.concat(out, axis=0, ignore_index=True)
         elif self.aggregation_method == "distribution":
             raise NotImplementedError(
                 "Distribution aggregation not implemented yet for MUCSVSS model."
