@@ -225,13 +225,6 @@ class MUCSVSSModel(BaseModel):
         )
 
     @staticmethod
-    def _hashable_array_signature(array):
-        # Compute a hash of the array's contents. Note: this is simplified for demonstration.
-        content_hash = hash(array.tobytes())
-        # Combine the shape and content hash into a single, hashable signature
-        return (array.shape, content_hash)
-
-    @staticmethod
     def _update_single_particle(
         prev_x, t, n, gamma, theta, t0_season, corr_values, key
     ):
@@ -283,14 +276,10 @@ class MUCSVSSModel(BaseModel):
         # We calculate the covariance matrix for the multivariate normal distribution
         # by taking the outer product of the standard deviations with itself
         # and multiplying it element-wise with the correlation matrix.
-        epsilon_cov = (
-            corr_values
-            * jnp.outer(
-                jnp.sqrt(
-                    jnp.exp(x[2 * n : 3 * n])
-                ),  # 2*n:3*n corresponds to lnsepsilonsq
-                jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
-            )
+        epsilon_cov = corr_values * jnp.outer(
+            # 2*n:3*n corresponds to lnsepsilonsq
+            jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
+            jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
         )
 
         # final use of key
@@ -346,43 +335,34 @@ class MUCSVSSModel(BaseModel):
         )
         # pmap to parallelize over devices
         # n, self.gamma, self.theta, t0_season, self.corr.values are always constant
+        # but self.corr.values is not hashable
         update_particles_parallel = pmap(
             update_particles_shard,
             in_axes=(0, None, None, None, None, None, None, 0),
             static_broadcasted_argnums=(2, 3, 4, 5),
         )
 
-        # History of tau + delta_1 * seas_1 + ... + delta_4 * seas_4
-        etauplusdeltas = []
-        for t, corresponding_time in tqdm(
-            zip(range(1, len(self.times) + 1), self.times), total=len(self.times)
+        def get_XTminus1_subkeys_reshaped(
+            X,
+            t,
+            key,
         ):
-            # Step 1: predict and update
-            W = W.at[t, :].set(
-                jnp.full(self.num_particles, -jnp.log(self.num_particles))
-            )
-
+            """
+            Update particles at time t and return the mean of tau + delta_1 * seas_1 + ... + delta_4 * seas_4
+            """
             subkeys = random.split(key, self.num_particles)
-            # Old: simple vmap update_particles
-            # X = X.at[t, :, :].set(update_particles(X[t - 1, :, :], t, n, subkeys))
             subkeys_reshaped = subkeys.reshape(
                 self.n_devices, self.n_particles_per_device, -1
             )
-            Xt_reshaped = X[t, :, :].reshape(
+            Xtminus1_reshaped = X[t - 1, :, :].reshape(
                 self.n_devices, self.n_particles_per_device, -1
             )
-            X_updated = update_particles_parallel(
-                Xt_reshaped,
-                t,
-                n,
-                self.gamma,
-                self.theta,
-                t0_season,
-                self.corr.values,
-                subkeys_reshaped,
-            )
-            X = X.at[t, :, :].set(X_updated.reshape(self.num_particles, 7 * n))
+            return Xtminus1_reshaped, subkeys_reshaped
 
+        jit_get_XTminus1_subkeys_reshaped = jit(get_XTminus1_subkeys_reshaped)
+
+        def update_X_W(X, W, X_updated, current_country_idxs, t, key):
+            X = X.at[t, :, :].set(X_updated.reshape(self.num_particles, 7 * n))
             # Mean of pi is tau + delta_1 * seas_1 + ... + delta_4 * seas_4
             # T x n matrix
             mean_vals = (
@@ -392,21 +372,16 @@ class MUCSVSSModel(BaseModel):
                 + X[t, :, 5 * n : 6 * n] * MUCSVSSModel._seas(2, t, t0_season)
                 + X[t, :, 6 * n : 7 * n] * MUCSVSSModel._seas(3, t, t0_season)
             )
-            etauplusdeltas.append(jnp.mean(mean_vals, axis=0))
+            etauplusdeltas_element = jnp.mean(mean_vals, axis=0)
             scale_vals = jnp.sqrt(
                 jnp.exp(X[t, :, n : 2 * n])
-            )  # 1*n:2*n corresponds to lnsetasq
-            # T x n as well
-
-            current_timestep_data = data[data[self.date_column] == corresponding_time]
-            current_country_idxs = [
-                self.countries.index(country)
-                for country in current_timestep_data["country"]
-            ]
+            )  # n:2*n corresponds to lnsetasq
+            # dim T x n
 
             # T x len(current_country_idxs)
             mean_vals = mean_vals[:, current_country_idxs]
             scale_vals = scale_vals[:, current_country_idxs]
+            #return X, etauplusdeltas_element, mean_vals, scale_vals
 
             # TODO: multivariate normal pdf
             W = W.at[t, :].set(
@@ -427,9 +402,9 @@ class MUCSVSSModel(BaseModel):
             W = W.at[t, :].set(jnp.exp(W[t, :]))
             W = W.at[t, :].set(W[t, :] / jnp.sum(W[t, :]))
 
-            if jnp.sum(W[t, :]) == 0:
-                print("WARNING: All weights are zero. Resampling will fail.")
-                print(f"(t = {t}, corresponding_time = {corresponding_time})")
+            # if jnp.sum(W[t, :]) == 0:
+            #     print("WARNING: All weights are zero. Resampling will fail.")
+            #     print(f"(t = {t}, corresponding_time = {corresponding_time})")
 
             # Step 2: resample
             key, subkey = random.split(key)
@@ -445,6 +420,51 @@ class MUCSVSSModel(BaseModel):
             W = W.at[t, :].set(jnp.log(W[t, :]))
 
             X = X.at[t, :, :].set(X[t, indices, :])
+            return X, W, etauplusdeltas_element
+
+        jit_update_X_W = jit(update_X_W)
+
+        # History of tau + delta_1 * seas_1 + ... + delta_4 * seas_4
+        etauplusdeltas = []
+        for t, corresponding_time in tqdm(
+            zip(range(1, len(self.times) + 1), self.times), total=len(self.times)
+        ):
+            # Step 1: predict and update
+            W = W.at[t, :].set(
+                jnp.full(self.num_particles, -jnp.log(self.num_particles))
+            )
+
+            current_timestep_data = data[data[self.date_column] == corresponding_time]
+            current_country_idxs = [
+                self.countries.index(country)
+                for country in current_timestep_data["country"]
+            ]
+
+            # Old: simple vmap update_particles
+            # X = X.at[t, :, :].set(update_particles(X[t - 1, :, :], t, n, subkeys))
+
+            key, subkey = random.split(key)
+
+            # X, etauplusdeltas_element, mean_vals, scale_vals = (
+            #     update_X_get_mean_scale(X, t, current_country_idxs, subkey)
+            # )
+            Xtminus1_reshaped, subkeys_reshaped = jit_get_XTminus1_subkeys_reshaped(
+                X, t, subkey
+            )
+            X_updated = update_particles_parallel(
+                Xtminus1_reshaped,
+                t,
+                n,
+                self.gamma,
+                self.theta,
+                t0_season,
+                self.corr.values,
+                subkeys_reshaped,
+            )
+            key, subkey = random.split(key)
+
+            X, W, etauplusdeltas_element = jit_update_X_W(X, W, X_updated, current_country_idxs, t, subkey)
+            etauplusdeltas.append(etauplusdeltas_element)
 
         if self.aggregation_method == "median":
             out = pd.DataFrame(
