@@ -37,12 +37,6 @@ class ARMAXModel(BaseModel):
         self.max_p = max_p
         self.max_q = max_q
         self.min_datapts = min_datapts
-        
-        # Create dictionaries to store the means and standard deviation for the normalization of the data per country
-        self.feature_means = {}
-        self.feature_stds = {}
-        self.target_mean = {}
-        self.target_std = {}
 
 
     def fit(self, data: pd.DataFrame):
@@ -56,21 +50,23 @@ class ARMAXModel(BaseModel):
         self.models = {}
         self.orders = {}
      
-        for country in countries:
-            # Normalize the data
-            data_country = data[data[self.country_column] == country]
-            self.feature_means[country] = data_country[self.exogenous_columns].mean()
-            self.feature_stds[country] = data_country[self.exogenous_columns].std()
-            self.target_mean[country] = data_country[self.inflation_column].mean()
-            self.target_std[country] = data_country[self.inflation_column].std()
-            data.loc[data[self.country_column]==country, self.exogenous_columns] = (
-                data_country[self.exogenous_columns] - self.feature_means[country]
-                ) / self.feature_stds[country]
-            data.loc[data[self.country_column]==country, self.inflation_column] = (
-                data[self.inflation_column] - self.target_mean[country]
-                ) / self.target_std[country]
+        # Normalize
+        self.feature_means = data[self.exogenous_columns].mean()
+        self.feature_stds = data[self.exogenous_columns].std()
+        self.target_mean = data[self.inflation_column].mean()
+        self.target_std = data[self.inflation_column].std()
+        data[self.exogenous_columns] = (
+            data[self.exogenous_columns] - self.feature_means
+            ) / self.feature_stds
+        
+        data[self.inflation_column] = (
+            data[self.inflation_column] - self.target_mean
+            ) / self.target_std
 
-        #for country in countries:
+
+
+
+        for country in countries:
             country_data = data[data[self.country_column] == country]
             country_data = country_data.set_index("date")
             country_data.index = pd.DatetimeIndex(country_data.index).to_period(
@@ -149,19 +145,20 @@ class ARMAXModel(BaseModel):
         data = data.copy()
         countries = data[self.country_column].unique()
         predictions = []
+
+        # Normalize
+        data[self.exogenous_columns] = (
+            data[self.exogenous_columns] - self.feature_means
+            ) / self.feature_stds
+        
+        data[self.inflation_column] = (
+            data[self.inflation_column] - self.target_mean
+            ) / self.target_std
+
         for country in countries:
             if country not in self.models:
                 continue # model was not trained for this country. Make no predictions
             country_data = data[data[self.country_column] == country]
-
-            # Normalize
-            country_data[self.exogenous_columns] = (
-                country_data[self.exogenous_columns] - self.feature_means[country]
-                ) / self.feature_stds[country] 
-            
-            country_data[self.inflation_column] = (
-                country_data[self.inflation_column] - self.target_mean[country]
-                ) / self.target_std[country]
 
             country_data = country_data.set_index("date")
             prediction = self._predict_country(country_data, country)
@@ -231,5 +228,5 @@ class ARMAXModel(BaseModel):
         inflation = forecast + const 
 
         # Denormalize
-        denormalizedInflation = inflation * self.target_std[country] + self.target_mean[country]
+        denormalizedInflation = inflation * self.target_std + self.target_mean
         return denormalizedInflation
