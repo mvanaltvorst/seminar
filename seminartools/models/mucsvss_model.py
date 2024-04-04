@@ -224,73 +224,7 @@ class MUCSVSSModel(BaseModel):
             None,
         )
 
-    @staticmethod
-    def _update_single_particle(
-        prev_x, t, n, gamma, theta, t0_season, corr_values, key
-    ):
-        """
-        Update a single particle at time t using the previous particle at time t-1.
-        Designed to be JIT'able.
-        """
-        x = jnp.zeros(7 * n)
-        key, subkey = random.split(key)
-        x = x.at[n : 2 * n].set(
-            prev_x[n : 2 * n] + jnp.sqrt(gamma) * random.normal(key=subkey, shape=(n,))
-        )
 
-        # lnsepsilonsq
-        key, subkey = random.split(key)
-        x = x.at[2 * n : 3 * n].set(
-            prev_x[2 * n : 3 * n]
-            + jnp.sqrt(gamma) * random.normal(key=subkey, shape=(n,))
-        )
-
-        # deltas
-        for delta_idx in [3, 4, 5, 6]:
-            key, subkey = random.split(key)
-            x = MUCSVSSModel._update_deltas(
-                delta_idx=delta_idx,
-                prev_x=prev_x,
-                x=x,
-                t=t,
-                n=n,
-                theta=theta,
-                t0_season=t0_season,
-                key=subkey,
-            )
-
-        # restrict sum of deltas to be 0 per country
-        for country_idx in range(n):
-            idx = jnp.array(
-                [
-                    3 * n + country_idx,
-                    4 * n + country_idx,
-                    5 * n + country_idx,
-                    6 * n + country_idx,
-                ]
-            )
-            # x[idx] -= jnp.mean(x[idx])
-            x = x.at[idx].set(x[idx] - jnp.mean(x[idx]))
-
-        # add the epsilon noise
-        # We calculate the covariance matrix for the multivariate normal distribution
-        # by taking the outer product of the standard deviations with itself
-        # and multiplying it element-wise with the correlation matrix.
-        epsilon_cov = corr_values * jnp.outer(
-            # 2*n:3*n corresponds to lnsepsilonsq
-            jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
-            jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
-        )
-
-        # final use of key
-        x = x.at[0:n].set(
-            random.multivariate_normal(
-                key=key,
-                mean=prev_x[0:n],
-                cov=epsilon_cov,
-            )
-        )
-        return x
 
     def _run_pf(self, data: pd.DataFrame):
         """
@@ -325,12 +259,81 @@ class MUCSVSSModel(BaseModel):
         #     static_argnums=(2,),
         # )
 
+        corr_values = self.corr.values
+
+        def _update_single_particle(
+            prev_x, t, key
+        ):
+            """
+            Update a single particle at time t using the previous particle at time t-1.
+            Designed to be JIT'able.
+            """
+            x = jnp.zeros(7 * n)
+            key, subkey = random.split(key)
+            x = x.at[n : 2 * n].set(
+                prev_x[n : 2 * n] + jnp.sqrt(self.gamma) * random.normal(key=subkey, shape=(n,))
+            )
+
+            # lnsepsilonsq
+            key, subkey = random.split(key)
+            x = x.at[2 * n : 3 * n].set(
+                prev_x[2 * n : 3 * n]
+                + jnp.sqrt(self.gamma) * random.normal(key=subkey, shape=(n,))
+            )
+
+            # deltas
+            for delta_idx in [3, 4, 5, 6]:
+                key, subkey = random.split(key)
+                x = MUCSVSSModel._update_deltas(
+                    delta_idx=delta_idx,
+                    prev_x=prev_x,
+                    x=x,
+                    t=t,
+                    n=n,
+                    theta=self.theta,
+                    t0_season=t0_season,
+                    key=subkey,
+                )
+
+            # restrict sum of deltas to be 0 per country
+            for country_idx in range(n):
+                idx = jnp.array(
+                    [
+                        3 * n + country_idx,
+                        4 * n + country_idx,
+                        5 * n + country_idx,
+                        6 * n + country_idx,
+                    ]
+                )
+                # x[idx] -= jnp.mean(x[idx])
+                x = x.at[idx].set(x[idx] - jnp.mean(x[idx]))
+
+            # add the epsilon noise
+            # We calculate the covariance matrix for the multivariate normal distribution
+            # by taking the outer product of the standard deviations with itself
+            # and multiplying it element-wise with the correlation matrix.
+            epsilon_cov = corr_values * jnp.outer(
+                # 2*n:3*n corresponds to lnsepsilonsq
+                jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
+                jnp.sqrt(jnp.exp(x[2 * n : 3 * n])),
+            )
+
+            # final use of key
+            x = x.at[0:n].set(
+                random.multivariate_normal(
+                    key=key,
+                    mean=prev_x[0:n],
+                    cov=epsilon_cov,
+                )
+            )
+            return x
+
         # jit_update_single_particle = jit(update_single_particle, static_argnums=(3,))
         # Wrapper function that uses vmap to vectorize update_single_particle over particles in a shard
         # We broadcast everything except the particles and keys
         update_particles_shard = vmap(
-            MUCSVSSModel._update_single_particle,
-            in_axes=(0, None, None, None, None, None, None, 0),
+            _update_single_particle,
+            in_axes=(0, None, 0),
             out_axes=0,
         )
         # pmap to parallelize over devices
@@ -338,8 +341,7 @@ class MUCSVSSModel(BaseModel):
         # but self.corr.values is not hashable
         update_particles_parallel = pmap(
             update_particles_shard,
-            in_axes=(0, None, None, None, None, None, None, 0),
-            static_broadcasted_argnums=(2, 3, 4, 5),
+            in_axes=(0, None, 0),
         )
 
         def get_XTminus1_subkeys_reshaped(
@@ -454,11 +456,6 @@ class MUCSVSSModel(BaseModel):
             X_updated = update_particles_parallel(
                 Xtminus1_reshaped,
                 t,
-                n,
-                self.gamma,
-                self.theta,
-                t0_season,
-                self.corr.values,
                 subkeys_reshaped,
             )
             key, subkey = random.split(key)
