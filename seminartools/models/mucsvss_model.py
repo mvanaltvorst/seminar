@@ -9,6 +9,7 @@ import jax.numpy as jnp
 from jax import lax, random, jit, vmap, pmap, device_count
 from jax.scipy.stats import norm
 from tqdm import tqdm
+import jax
 
 # nu follows a normal distribution with variance gamma
 GAMMA = 0.2
@@ -127,7 +128,7 @@ class MUCSVSSModel(BaseModel):
             columns=countries,
         )
 
-    def _construct_initial_X_W(self, key: random.PRNGKey, n: int):
+    def _construct_initial_X_W(self, key: random.PRNGKey, n: int, T: int):
         """
         Construct the initial particles and weights.
         OLD UNIVARIATE: [tau, lnsetasq, lnsepsilonsq, delta1, delta2, delta3, delta4]
@@ -230,7 +231,6 @@ class MUCSVSSModel(BaseModel):
         # Combine the shape and content hash into a single, hashable signature
         return (array.shape, content_hash)
 
-
     @staticmethod
     def _update_single_particle(
         prev_x, t, n, gamma, theta, t0_season, corr_values, key
@@ -255,7 +255,7 @@ class MUCSVSSModel(BaseModel):
         # deltas
         for delta_idx in [3, 4, 5, 6]:
             key, subkey = random.split(key)
-            x = MUCSVSSModel.update_deltas(
+            x = MUCSVSSModel._update_deltas(
                 delta_idx=delta_idx,
                 prev_x=prev_x,
                 x=x,
@@ -319,7 +319,9 @@ class MUCSVSSModel(BaseModel):
         data["pi"] = data[self.inflation_column] * 100
 
         key, subkey = random.split(key)
-        X, W = self._construct_initial_X_W(subkey, n)
+        X, W = self._construct_initial_X_W(subkey, n, len(self.times))
+        # X: T x particles x 7*n
+        # W: T x particles
 
         # Seasonality indicator function
         # we determine which modulo corresponds to Q1
@@ -347,7 +349,7 @@ class MUCSVSSModel(BaseModel):
         update_particles_parallel = pmap(
             update_particles_shard,
             in_axes=(0, None, None, None, None, None, None, 0),
-            static_broadcasted_argnums=(2, 3, 4, 5, 6),
+            static_broadcasted_argnums=(2, 3, 4, 5),
         )
 
         # History of tau + delta_1 * seas_1 + ... + delta_4 * seas_4
@@ -366,9 +368,11 @@ class MUCSVSSModel(BaseModel):
             subkeys_reshaped = subkeys.reshape(
                 self.n_devices, self.n_particles_per_device, -1
             )
-            X_reshaped = X.reshape(self.n_devices, self.n_particles_per_device, -1)
+            Xt_reshaped = X[t, :, :].reshape(
+                self.n_devices, self.n_particles_per_device, -1
+            )
             X_updated = update_particles_parallel(
-                X_reshaped,
+                Xt_reshaped,
                 t,
                 n,
                 self.gamma,
@@ -377,7 +381,7 @@ class MUCSVSSModel(BaseModel):
                 self.corr.values,
                 subkeys_reshaped,
             )
-            X = X_updated.reshape(self.num_particles, -1)
+            X = X.at[t, :, :].set(X_updated.reshape(self.num_particles, 7 * n))
 
             # Mean of pi is tau + delta_1 * seas_1 + ... + delta_4 * seas_4
             # T x n matrix
