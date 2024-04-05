@@ -3,6 +3,8 @@ import numpy as np
 import bambi as bmb
 from .base_model import BaseModel
 import arviz as az
+from xarray import apply_ufunc
+from scipy.stats import gaussian_kde
 
 
 class RandomEffectsModel(BaseModel):
@@ -135,13 +137,24 @@ class RandomEffectsModel(BaseModel):
             predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean(
                 "sample"
             )
+            
+        elif pointwise_aggregation_method == "distribution":
+            def getDistribution(row):
+                kde = gaussian_kde(row)
+                return kde
+
+            predictions = az.extract(predictions)[f"{self.target_column}_mean"]
+            df = predictions.to_dataframe()
+            df = df.groupby("inflation_obs")
+            df = df.agg(getDistribution)
+            predictions = df["inflation_mean"].values
+
         else:
             raise ValueError(
                 f"Unknown pointwise aggregation method: {pointwise_aggregation_method}"
             )
-
+        
         data["predictions"] = predictions
-
         predictions = (
             data.reset_index()
             .set_index([self.date_column, self.country_column])["predictions"]
@@ -158,9 +171,21 @@ class RandomEffectsModel(BaseModel):
                 predictions.index.get_level_values(1),
             )
         )
+        
+        # deNormalize
+        if pointwise_aggregation_method == "mean":
 
-        #deNormalize
-        predictions.inflation = predictions.inflation * self.target_std + self.target_mean
+            predictions.inflation = predictions.inflation * self.target_std + self.target_mean
+            
+        if pointwise_aggregation_method == "distribution":
+
+            def denormalize_density(kde):
+                x_axis = np.linspace(min(kde.dataset[0]),max(kde.dataset[0]), 1000)
+                pdf_values = kde.pdf(x_axis)
+                denormalized_x_axis = x_axis * self.target_std + self.target_mean
+                return {"pdf": pdf_values, "inflation_grid": denormalized_x_axis}
+
+            predictions.inflation = predictions.inflation.apply(denormalize_density)
 
         return predictions.reset_index().rename(
             columns={"level_0": self.date_column, "level_1": self.country_column}
