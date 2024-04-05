@@ -19,8 +19,8 @@ GAMMA = 0.2
 # zeta follows a normal distribution with variance theta
 THETA = 0.002
 
-INIT_LNSETASQ = 0
-INIT_LNSEPSILONSQ = 0
+INIT_LNSETASQ = -4
+INIT_LNSEPSILONSQ = -4
 INIT_DELTA = 0
 INIT_TAU = 0
 
@@ -136,6 +136,7 @@ class MUCSVSSModel(BaseModel):
 
         X0 = jnp.zeros((self.num_particles, 7 * n))
         key, subkey = random.split(key)
+        # tau
         X0 = X0.at[:, 0:n].set(
             self.init_tau
             + self.vague_prior_tau_sigma
@@ -145,6 +146,7 @@ class MUCSVSSModel(BaseModel):
             )
         )
         key, subkey = random.split(key)
+        # lnsetasq
         X0 = X0.at[:, n : 2 * n].set(
             self.init_lnsetasq
             + self.vague_prior_lnsetasq_sigma
@@ -154,6 +156,7 @@ class MUCSVSSModel(BaseModel):
             )
         )
         key, subkey = random.split(key)
+        # lnsepsilonsq
         X0 = X0.at[:, 2 * n : 3 * n].set(
             self.init_lnsepsilonsq
             + self.vague_prior_lnsepsilonsq_sigma
@@ -197,7 +200,7 @@ class MUCSVSSModel(BaseModel):
         # return 1 if t % 4 == ((i - t0_season) % 4) else 0
 
         # Using lax.cond for JIT-compatible conditional logic
-        return lax.cond(t % 4 == ((i - t0_season) % 4), lambda _: 1, lambda _: 0, None)
+        return lax.cond(t % 4 == ((i - t0_season + 1) % 4), lambda _: 1, lambda _: 0, None)
 
     @staticmethod
     def _update_deltas(delta_idx, prev_x, x, t, n, theta, t0_season, key):
@@ -212,7 +215,10 @@ class MUCSVSSModel(BaseModel):
             return x.at[delta_idx * n : (delta_idx + 1) * n].set(update)
 
         def false_fun(_):
-            return x  # No update needed, return x as is
+            # No update needed, set the value of x to the delta from the previous value
+            return x.at[delta_idx * n : (delta_idx + 1) * n].set(
+                prev_x[delta_idx * n : (delta_idx + 1) * n]
+            )
 
         # Use lax.cond for JIT'able conditional execution
         return lax.cond(
@@ -261,9 +267,12 @@ class MUCSVSSModel(BaseModel):
             """
             Update a single particle at time t using the previous particle at time t-1.
             Designed to be JIT'able.
+
+            tau, lnsetasq, lnsepsilonsq, delta1, delta2, delta3, delta4
             """
             x = jnp.zeros(7 * n)
             key, subkey = random.split(key)
+            # lnsetasq
             x = x.at[n : 2 * n].set(
                 prev_x[n : 2 * n]
                 + jnp.sqrt(self.gamma) * random.normal(key=subkey, shape=(n,))
@@ -323,6 +332,10 @@ class MUCSVSSModel(BaseModel):
             )
             return x
 
+        _update_single_particle(
+            X[0, 0, :], 0, random.PRNGKey(42)
+        )
+
         # jit_update_single_particle = jit(update_single_particle, static_argnums=(3,))
         # Wrapper function that uses vmap to vectorize update_single_particle over particles in a shard
         # We broadcast everything except the particles and keys
@@ -375,7 +388,7 @@ class MUCSVSSModel(BaseModel):
 
             scale_vals = jnp.sqrt(
                 jnp.exp(X[t, :, n : 2 * n])
-            )  # n:2*n corresponds to lnsetasq
+            ) # n:2*n corresponds to lnsetasq
             # dim T x n
 
             # T x len(current_country_idxs)
@@ -438,6 +451,12 @@ class MUCSVSSModel(BaseModel):
                 for country in current_timestep_data["country"]
             ]
 
+            if t == 10:
+                _update_single_particle(
+                    X[9, 0, :], 10, random.PRNGKey(42)
+                )
+
+
             # Old: simple vmap update_particles
             # X = X.at[t, :, :].set(update_particles(X[t - 1, :, :], t, n, subkeys))
 
@@ -466,7 +485,7 @@ class MUCSVSSModel(BaseModel):
             # break
             key, subkey = random.split(key)
 
-            X, W, etauplusdeltas_element = jit_update_X_W(
+            X, W, etauplusdeltas_element = update_X_W(
                 X,
                 W,
                 X_updated,
@@ -476,7 +495,7 @@ class MUCSVSSModel(BaseModel):
                 subkey,
             )
 
-            etauplusdeltas.append(etauplusdeltas_element)
+            etauplusdeltas.append(etauplusdeltas_element / 100)
 
         if self.aggregation_method == "median":
             out = []
@@ -605,7 +624,7 @@ class MUCSVSSModel(BaseModel):
         self.corr = self._construct_corr_matrix(self.countries)
 
 
-    def predict(self, data: pd.DataFrame) -> pd.Series:
+    def predict(self, data: pd.DataFrame, aggregation_method: str = "median") -> pd.Series:
         """
         Predict the state at time t.
 
@@ -619,12 +638,12 @@ class MUCSVSSModel(BaseModel):
 
         return pd.DataFrame(
             [
-                self._predict(data.loc[data[self.country_column] == country])
+                self._predict(data.loc[data[self.country_column] == country], aggregation_method)
                 for country in data[self.country_column].unique()
             ]
         )
 
-    def _predict(self, data: pd.DataFrame):
+    def _predict(self, data: pd.DataFrame, aggregation_method: str):
         """
         Predict the state at time t for a single country.
         """
@@ -651,7 +670,7 @@ class MUCSVSSModel(BaseModel):
 
         tplus1 = len(data) + 1
 
-        if self.aggregation_method == "distribution":
+        if aggregation_method == "distribution":
             minVal = min(
                 min(tau_tminus1.dataset[0]),
                 min(delta_tminus1["edelta1"].dataset[0]),
@@ -693,7 +712,7 @@ class MUCSVSSModel(BaseModel):
                 "date": data["date"].iloc[-1] + pd.DateOffset(months=3),
             }
 
-        elif self.aggregation_method == "median":
+        elif aggregation_method == "median":
             return {
                 "inflation": (
                     tau_tminus1
@@ -705,3 +724,5 @@ class MUCSVSSModel(BaseModel):
                 "country": data["country"].iloc[0],
                 "date": data["date"].iloc[-1] + pd.DateOffset(months=3),
             }
+        else:
+            raise ValueError(f"Invalid aggregation method: {aggregation_method}")
