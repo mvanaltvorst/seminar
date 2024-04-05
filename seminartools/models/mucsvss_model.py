@@ -9,8 +9,6 @@ import jax.numpy as jnp
 from jax import lax, random, jit, vmap, pmap, device_count
 from jax.scipy.stats import norm
 from tqdm import tqdm
-import jax
-from time import time
 import os
 
 # nu follows a normal distribution with variance gamma
@@ -200,7 +198,9 @@ class MUCSVSSModel(BaseModel):
         # return 1 if t % 4 == ((i - t0_season) % 4) else 0
 
         # Using lax.cond for JIT-compatible conditional logic
-        return lax.cond(t % 4 == ((i - t0_season + 1) % 4), lambda _: 1, lambda _: 0, None)
+        return lax.cond(
+            t % 4 == ((i - t0_season + 1) % 4), lambda _: 1, lambda _: 0, None
+        )
 
     @staticmethod
     def _update_deltas(delta_idx, prev_x, x, t, n, theta, t0_season, key):
@@ -251,15 +251,6 @@ class MUCSVSSModel(BaseModel):
         # Seasonality indicator function
         # we determine which modulo corresponds to Q1
         t0_season = (self.times[0].month - 1) // 3
-
-        # update_particles = jit(
-        #     vmap(
-        #         update_single_particle,
-        #         in_axes=(0, None, None, 0),
-        #         out_axes=0,
-        #     ),
-        #     static_argnums=(2,),
-        # )
 
         corr_values = self.corr.values
 
@@ -332,10 +323,6 @@ class MUCSVSSModel(BaseModel):
             )
             return x
 
-        _update_single_particle(
-            X[0, 0, :], 0, random.PRNGKey(42)
-        )
-
         # jit_update_single_particle = jit(update_single_particle, static_argnums=(3,))
         # Wrapper function that uses vmap to vectorize update_single_particle over particles in a shard
         # We broadcast everything except the particles and keys
@@ -388,7 +375,7 @@ class MUCSVSSModel(BaseModel):
 
             scale_vals = jnp.sqrt(
                 jnp.exp(X[t, :, n : 2 * n])
-            ) # n:2*n corresponds to lnsetasq
+            )  # n:2*n corresponds to lnsetasq
             # dim T x n
 
             # T x len(current_country_idxs)
@@ -451,12 +438,6 @@ class MUCSVSSModel(BaseModel):
                 for country in current_timestep_data["country"]
             ]
 
-            if t == 10:
-                _update_single_particle(
-                    X[9, 0, :], 10, random.PRNGKey(42)
-                )
-
-
             # Old: simple vmap update_particles
             # X = X.at[t, :, :].set(update_particles(X[t - 1, :, :], t, n, subkeys))
 
@@ -473,19 +454,10 @@ class MUCSVSSModel(BaseModel):
                 t,
                 subkeys_reshaped,
             )
-            # jax.debug.print("X_updated: {x}", x = X_updated)
-            # jax.debug.print("0:n: {x}", x = jnp.isnan(X_updated[:, :, 0:n]).any())
-            # jax.debug.print("n:2n: {x}", x = jnp.isnan(X_updated[:, :, n:2*n]).any())
-            # jax.debug.print("2n:3n: {x}", x = jnp.isnan(X_updated[:, :, 2*n:3*n]).any())
-            # jax.debug.print("3n:4n: {x}", x = jnp.isnan(X_updated[:, :, 3*n:4*n]).any())
-            # jax.debug.print("4n:5n: {x}", x = jnp.isnan(X_updated[:, :, 4*n:5*n]).any())
-            # jax.debug.print("5n:6n: {x}", x = jnp.isnan(X_updated[:, :, 5*n:6*n]).any())
-            # jax.debug.print("6n:7n: {x}", x = jnp.isnan(X_updated[:, :, 6*n:7*n]).any())
 
-            # break
             key, subkey = random.split(key)
 
-            X, W, etauplusdeltas_element = update_X_W(
+            X, W, etauplusdeltas_element = jit_update_X_W(
                 X,
                 W,
                 X_updated,
@@ -607,7 +579,7 @@ class MUCSVSSModel(BaseModel):
 
         if path is None:
             path = f"../../models/mucsvss_model_{self.num_particles}.parquet"
-        
+
         # construct parent path
         parent_path = "/".join(path.split("/")[:-1])
         os.makedirs(parent_path, exist_ok=True)
@@ -619,12 +591,17 @@ class MUCSVSSModel(BaseModel):
         """
         self.stored_state_means = pd.read_parquet(path)
         # calculate correlation matrix
-        self.countries = self.stored_state_means.index.get_level_values(0).unique().tolist()
-        self.times = sorted(self.stored_state_means.index.get_level_values(1).unique().tolist())
+        self.countries = (
+            self.stored_state_means.index.get_level_values(0).unique().tolist()
+        )
+        self.times = sorted(
+            self.stored_state_means.index.get_level_values(1).unique().tolist()
+        )
         self.corr = self._construct_corr_matrix(self.countries)
 
-
-    def predict(self, data: pd.DataFrame, aggregation_method: str = "median") -> pd.Series:
+    def predict(
+        self, data: pd.DataFrame, aggregation_method: str = "median"
+    ) -> pd.Series:
         """
         Predict the state at time t.
 
@@ -638,7 +615,9 @@ class MUCSVSSModel(BaseModel):
 
         return pd.DataFrame(
             [
-                self._predict(data.loc[data[self.country_column] == country], aggregation_method)
+                self._predict(
+                    data.loc[data[self.country_column] == country], aggregation_method
+                )
                 for country in data[self.country_column].unique()
             ]
         )
