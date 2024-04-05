@@ -492,7 +492,7 @@ class MUCSVSSModel(BaseModel):
                     "country": jnp.repeat(jnp.array(self.countries), len(self.times)),
                 }
             )
-        elif self.aggregation_method == "distribution":
+        elif self.aggregation_method == "distribution":     
             raise NotImplementedError(
                 "Distribution aggregation not implemented yet for MUCSVSS model."
             )
