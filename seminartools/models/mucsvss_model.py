@@ -11,6 +11,7 @@ from jax.scipy.stats import norm
 from tqdm import tqdm
 import jax
 from time import time
+import os
 
 # nu follows a normal distribution with variance gamma
 GAMMA = 0.2
@@ -577,6 +578,32 @@ class MUCSVSSModel(BaseModel):
         # out[self.country_column] = data[self.country_column].iloc[0]
 
         return out.set_index([self.country_column, self.date_column])
+
+    def save_to_disk(self, path: str | None = None):
+        """
+        Save the model to disk.
+        """
+        if not hasattr(self, "stored_state_means"):
+            raise ValueError("Model has not been run_pf'd yet.")
+
+        if path is None:
+            path = f"../../models/mucsvss_model_{self.num_particles}.parquet"
+        
+        # construct parent path
+        parent_path = "/".join(path.split("/")[:-1])
+        os.makedirs(parent_path, exist_ok=True)
+        self.stored_state_means.to_parquet(path)
+
+    def load_from_disk(self, path: str):
+        """
+        Load the model from disk.
+        """
+        self.stored_state_means = pd.read_parquet(path)
+        # calculate correlation matrix
+        self.countries = self.stored_state_means.index.get_level_values(0).unique().tolist()
+        self.times = sorted(self.stored_state_means.index.get_level_values(1).unique().tolist())
+        self.corr = self._construct_corr_matrix(self.countries)
+
 
     def predict(self, data: pd.DataFrame) -> pd.Series:
         """
