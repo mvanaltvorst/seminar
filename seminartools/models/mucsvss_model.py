@@ -470,6 +470,7 @@ class MUCSVSSModel(BaseModel):
             etauplusdeltas.append(etauplusdeltas_element / 100)
 
         if self.aggregation_method == "median":
+
             out = []
             for country_idx, country in enumerate(self.countries):
                 out.append(
@@ -521,7 +522,9 @@ class MUCSVSSModel(BaseModel):
                     )
                 )
             out = pd.concat(out, axis=0, ignore_index=True)
-        elif self.aggregation_method == "distribution":
+            
+        elif self.aggregation_method == "distribution":    
+
             raise NotImplementedError(
                 "Distribution aggregation not implemented yet for MUCSVSS model."
             )
