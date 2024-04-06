@@ -6,6 +6,7 @@ import arviz as az
 import pymc as pm
 from seminartools.matern_kernel import MaternGeospatial
 from tqdm import tqdm
+from scipy.stats import gaussian_kde
 
 
 class DistanceModel(BaseModel):
@@ -259,6 +260,13 @@ class DistanceModel(BaseModel):
             aggregated_predictions = predictions.mean(axis=0)
         elif aggregation_method == "median":
             aggregated_predictions = np.median(predictions, axis=0)
+        elif aggregation_method == "distribution":
+            def getKDE(row):
+                kde = gaussian_kde(row)
+                return kde
+
+            aggregated_predictions = np.apply_along_axis(getKDE, arr=predictions, axis=0)
+
         else:
             raise ValueError(f"Unsupported aggregation method: {aggregation_method}")
 
@@ -286,6 +294,14 @@ class DistanceModel(BaseModel):
         predictions_df = predictions_df
 
         # Denormalize
-        predictions_df["inflation"] = predictions_df["inflation"] * self.target_std + self.target_mean
-
+        if aggregation_method == "mean" or aggregation_method == "median":
+            predictions_df["inflation"] = predictions_df["inflation"] * self.target_std + self.target_mean
+        elif aggregation_method == "distribution":
+            def denormalize_density(kde):
+                x_axis = np.linspace(min(kde.dataset[0]),max(kde.dataset[0]), 1000)
+                pdf_values = kde.pdf(x_axis)
+                denormalized_x_axis = x_axis * self.target_std + self.target_mean
+                return {"pdf": pdf_values, "inflation_grid": denormalized_x_axis}
+            
+            predictions_df.inflation = predictions_df.inflation.apply(denormalize_density)
         return predictions_df
