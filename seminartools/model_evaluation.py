@@ -29,8 +29,29 @@ def get_upside_entropy(modelDensity : BaseModel, unconditionalDensity : BaseMode
 
     median = modelDensity.median
     integral = quad(internalFunction,-np.inf, median)
+    
+def get_brier_score(data: pd.DataFrame):
+    data["95_interval"] = data.inflation_pred.apply(lambda x:get_95_interval(density=x))
+    
+    def in_interval(interval, inflation):
+        lower_bound = interval[0]
+        upper_bound = interval[1]
+        if inflation > lower_bound and inflation < upper_bound:
+            return 1
+        else:
+            return 0
+        
+    data["in_interval"] = data.apply(lambda row: in_interval(row["95_interval"], row["inflation_true"]), axis=1)
+    diff = (0.95-data["in_interval"])
+    diff2 = diff.apply(lambda x : x**2)
+    score = sum(diff2)
+    return score/len(data)
 
-def get_95_interval(pdf_values,inflation_data):
+
+
+def get_95_interval(density: dict):
+    pdf_values = density["pdf"]
+    inflation_data = density["inflation_grid"]
     sum_left= 0
     sumRight = 0
     for i in range(0,len(pdf_values)):
@@ -47,3 +68,4 @@ def get_95_interval(pdf_values,inflation_data):
 
     interval = [inflation_data[left_index], inflation_data[-right_index]]
     return interval
+
