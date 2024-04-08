@@ -4,3 +4,5 @@ statsmodels
 seaborn
 bambi
 pycountry
+joblib
+tqdm
