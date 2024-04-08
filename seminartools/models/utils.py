@@ -137,6 +137,11 @@ def _get_stats(
     mz_slope = results.params["inflation_pred"]
     mz_r2 = results.rsquared
 
+    # get the test statistic of the MZ test: Wald test, coefficient is 1 and intercept is 0
+    wald_test = results.wald_test("inflation_pred = 1, constant = 0")
+
+
+
     return pd.Series(
         {
             "mse": mean_squared_error(
@@ -149,6 +154,7 @@ def _get_stats(
             "mz_intercept": mz_intercept,
             "mz_slope": mz_slope,
             "mz_r2": mz_r2,
+            "mz_wald_test_statistic": wald_test.statistic[0][0],
         }
     )
 

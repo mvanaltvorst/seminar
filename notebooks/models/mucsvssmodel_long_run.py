@@ -34,7 +34,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-filepath = f"../../models/mucsvss_model_{args.num_particles}_{'stochastic' if args.stochastic_seasonality else 'deterministic'}_{'all' if args.countries == 'all' else args.countries}.pkl"
+filepath = f"../../models/mucsvss_model_intra_continent_{args.num_particles}_{'stochastic' if args.stochastic_seasonality else 'deterministic'}_{'all' if args.countries == 'all' else args.countries}.pkl"
 
 if os.path.exists(filepath):
     print("Model already exists, skipping...")
