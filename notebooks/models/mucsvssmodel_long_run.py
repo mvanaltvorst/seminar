@@ -20,10 +20,11 @@ parser.add_argument(
     help="Number of particles for the model",
 )
 parser.add_argument(
-    "--stochastic_seasonality",
+    "--stochastic-seasonality",
     type=bool,
     default=True,
     help="Whether to include stochastic seasonality",
+    action=argparse.BooleanOptionalAction
 )
 parser.add_argument(
     "--countries",
