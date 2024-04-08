@@ -261,7 +261,7 @@ class DistanceModel(BaseModel):
 
         # Aggregate predictions across samples
         if self.pointwise_aggregation_method == "mean":
-            pointwise_aggregated_predictions = predictions.mean(axis=0)
+            aggregated_predictions = predictions.mean(axis=0)
         elif self.pointwise_aggregation_method == "median":
             aggregated_predictions = np.median(predictions, axis=0)
         elif self.pointwise_aggregation_method == "distribution":
