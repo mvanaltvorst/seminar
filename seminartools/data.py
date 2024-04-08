@@ -30,17 +30,29 @@ def read_inflation(
         If True, compute the first difference of the hcpi (quarterly inflation rate).
         if False, return the hcpi as is.
     """
+  
+    if sheet_name == "ccpi_q":
+        # world bank data, ignore last 2 rows
+        df_hcpi = pd.read_excel(
+                    filepath,
+                    sheet_name= sheet_name,
+                    skipfooter=2,)
+        df_hcpi =  df_hcpi.drop(columns=["Indicator Type", "Series Name"])
 
-    # world bank data, ignore last 2 rows
-    df_hcpi = (
-        pd.read_excel(
-            filepath,
-            sheet_name=sheet_name,
-            skipfooter=2,
-        )
-        .drop(columns=["Indicator Type", "Series Name"])
-        .set_index(["Country Code", "IMF Country Code", "Country"])
-    )
+        #Country column is unnamed in excel file
+        df_hcpi.rename(columns = {"Unnamed: 2": "Country"}, inplace=True)
+        df_hcpi.set_index(["Country Code", "IMF Country Code", "Country"], inplace = True)
+        
+    elif sheet_name == "hcpi_q":
+        df_hcpi = (
+                    pd.read_excel(
+                        filepath,
+                        sheet_name=sheet_name,
+                        skipfooter=2,
+                    )
+                    .drop(columns=["Indicator Type", "Series Name"])
+                    .set_index(["Country Code", "IMF Country Code", "Country"])
+                )
 
     # identify unnamed column and remove all columns after it
     unnamed_col_idx = df_hcpi.columns.str.contains("Unnamed").argmax()
@@ -457,7 +469,8 @@ def read_unemployment(
 
 def read_merged(
         remove_countries = [],
-        only_countries = []
+        only_countries = [],
+        coreInf = False
 ):
     """
     Args:
@@ -465,13 +478,25 @@ def read_merged(
         only_countries: Only consider these countries 
     Returns a merged dataframe of all the data sources.
     """
-    dfs = {
-        "inflation": read_inflation(mergeable_format=True),
-        "commodity": read_commodity(mergeable_format=True),
-        "gdp_growth": read_gdp_growth(mergeable_format=True),
-        "interest_rate": read_interest_rate(mergeable_format=True),
-        "unemployment": read_unemployment(mergeable_format=True),
-    }
+
+    if coreInf:
+
+        dfs = {
+            "inflation": read_inflation(mergeable_format=True, sheet_name = "ccpi_q"),
+            "commodity": read_commodity(mergeable_format=True),
+            "gdp_growth": read_gdp_growth(mergeable_format=True),
+            "interest_rate": read_interest_rate(mergeable_format=True),
+            "unemployment": read_unemployment(mergeable_format=True),
+        }
+    else:
+        dfs = {
+            "inflation": read_inflation(mergeable_format=True),
+            "commodity": read_commodity(mergeable_format=True),
+            "gdp_growth": read_gdp_growth(mergeable_format=True),
+            "interest_rate": read_interest_rate(mergeable_format=True),
+            "unemployment": read_unemployment(mergeable_format=True),
+        }
+
     df = pd.concat([
         dfs['inflation'],
         #dfs['commodity'],
