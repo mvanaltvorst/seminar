@@ -4,5 +4,8 @@ statsmodels
 seaborn
 bambi
 pycountry
-joblib
+openpyxl
+xlrd
 tqdm
+joblib
+scikit-learn
