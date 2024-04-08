@@ -3,6 +3,9 @@ import numpy as np
 import bambi as bmb
 from .base_model import BaseModel
 import arviz as az
+from xarray import apply_ufunc
+from scipy.stats import gaussian_kde
+from scipy.integrate import simps
 
 
 class RandomEffectsModel(BaseModel):
@@ -17,6 +20,7 @@ class RandomEffectsModel(BaseModel):
         chains: int = 4,
         num_draws: int = 1500,
         nuts_sampler: str = "nutpie",  # ❤️ nutpie
+        pointwise_aggregation_method: str = "mean",
     ):
         """
         Initializes the model.
@@ -26,6 +30,7 @@ class RandomEffectsModel(BaseModel):
         self.country_column = country_column
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
+        self.pointwise_aggregation_method = pointwise_aggregation_method
 
         # MCMC parameters
         self.tune = tune
@@ -42,6 +47,9 @@ class RandomEffectsModel(BaseModel):
             for i in range(1, lags + 1)
             for col in exogenous_columns + [target_column]
         ]
+
+        self.regression_columns = lagged_exog_columns
+
         # self.formula += " + ".join(lagged_exog_columns)
         for i, col in enumerate(lagged_exog_columns):
             self.formula += f"(0 + {col} | {country_column})"
@@ -74,6 +82,15 @@ class RandomEffectsModel(BaseModel):
         # Drop rows with NaNs due to lagged variables
         data = data.dropna()
 
+        # Normalize
+        self.feature_means = data[self.regression_columns].mean()
+        self.feature_stds = data[self.regression_columns].std()
+        self.target_mean = data[self.target_column].mean()
+        self.target_std = data[self.target_column].std()
+
+        data[self.regression_columns] = (data[self.regression_columns] - self.feature_means) / self.feature_stds
+        data[self.target_column] = (data[self.target_column] - self.target_mean) / self.target_std
+
         # Fit the model
         self.model = bmb.Model(self.formula, data=data)
         self.results = self.model.fit(
@@ -102,7 +119,7 @@ class RandomEffectsModel(BaseModel):
 
         return data.groupby(self.country_column, group_keys=False).apply(_add_lags)
 
-    def predict(self, data: pd.DataFrame, pointwise_aggregation_method: str = "mean"):
+    def predict(self, data: pd.DataFrame):
         """
         Predicts the target variable on data.
         """
@@ -111,22 +128,36 @@ class RandomEffectsModel(BaseModel):
         data = self._create_lagged_variables(data)
         data = data.dropna()
 
+        #normalize
+        data[self.regression_columns] = (data[self.regression_columns] - self.feature_means) / self.feature_stds
+
         # Predict using the model that was fit
         predictions = self.model.predict(
             self.results, data=data, inplace=False, sample_new_groups=True
         )
 
-        if pointwise_aggregation_method == "mean":
+        if self.pointwise_aggregation_method == "mean":
             predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean(
                 "sample"
             )
+            
+        elif self.pointwise_aggregation_method == "distribution":
+            def getDistribution(row):
+                kde = gaussian_kde(row)
+                return kde
+
+            predictions = az.extract(predictions)[f"{self.target_column}_mean"]
+            df = predictions.to_dataframe()
+            df = df.groupby("inflation_obs")
+            df = df.agg(getDistribution)
+            predictions = df["inflation_mean"].values
+
         else:
             raise ValueError(
-                f"Unknown pointwise aggregation method: {pointwise_aggregation_method}"
+                f"Unknown pointwise aggregation method: {self.pointwise_aggregation_method}"
             )
-
+        
         data["predictions"] = predictions
-
         predictions = (
             data.reset_index()
             .set_index([self.date_column, self.country_column])["predictions"]
@@ -143,6 +174,23 @@ class RandomEffectsModel(BaseModel):
                 predictions.index.get_level_values(1),
             )
         )
+        
+        # deNormalize
+        if self.pointwise_aggregation_method == "mean":
+
+            predictions.inflation = predictions.inflation * self.target_std + self.target_mean
+            
+        if self.pointwise_aggregation_method == "distribution":
+
+            def denormalize_density(kde):
+                x_axis = np.linspace(min(kde.dataset[0]),max(kde.dataset[0]), 1000)
+                pdf_values = kde.pdf(x_axis)
+                denormalized_x_axis = x_axis * self.target_std + self.target_mean
+                area = simps(pdf_values)
+                pdf_values = pdf_values/area
+                return {"pdf": pdf_values, "inflation_grid": denormalized_x_axis}
+
+            predictions.inflation = predictions.inflation.apply(denormalize_density)
 
         return predictions.reset_index().rename(
             columns={"level_0": self.date_column, "level_1": self.country_column}
