@@ -86,6 +86,8 @@ class MUCSVSSModel(BaseModel):
             self.num_particles % self.n_devices == 0
         ), "Total particles must be divisible by the number of devices."
 
+        self.is_fitted = False
+
     def fit(self, data: pd.DataFrame):
         """
         This model is not meant to be fitted to data every iteration using this method.
@@ -100,6 +102,8 @@ class MUCSVSSModel(BaseModel):
         Run the particle filter on the data of a single country.
         """
         self.aggregation_method = aggregation_method
+        if self.is_fitted: # Already loaded or fitted before
+            return
 
         # dfs = Parallel(n_jobs=N_CORES)(
         #     delayed(self._run_pf)(data.loc[data[self.country_column] == country])
@@ -108,6 +112,7 @@ class MUCSVSSModel(BaseModel):
         df = self._run_pf(data)
         # self.stored_state_means = pd.concat(dfs, axis=0)
         self.stored_state_means = df.astype("float")
+        self.is_fitted = True
 
     def _construct_corr_matrix(self, countries: list[str]) -> pd.DataFrame:
         """
@@ -601,6 +606,7 @@ class MUCSVSSModel(BaseModel):
             self.stored_state_means.index.get_level_values(1).unique().tolist()
         )
         self.corr = self._construct_corr_matrix(self.countries)
+        self.is_fitted = True
 
     def predict(
         self, data: pd.DataFrame, aggregation_method: str = "median"
