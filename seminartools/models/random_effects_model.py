@@ -5,6 +5,7 @@ from .base_model import BaseModel
 import arviz as az
 from xarray import apply_ufunc
 from scipy.stats import gaussian_kde
+from scipy.integrate import simps
 
 
 class RandomEffectsModel(BaseModel):
@@ -19,6 +20,7 @@ class RandomEffectsModel(BaseModel):
         chains: int = 4,
         num_draws: int = 1500,
         nuts_sampler: str = "nutpie",  # ❤️ nutpie
+        pointwise_aggregation_method: str = "mean",
     ):
         """
         Initializes the model.
@@ -28,6 +30,7 @@ class RandomEffectsModel(BaseModel):
         self.country_column = country_column
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
+        self.pointwise_aggregation_method = pointwise_aggregation_method
 
         # MCMC parameters
         self.tune = tune
@@ -116,7 +119,7 @@ class RandomEffectsModel(BaseModel):
 
         return data.groupby(self.country_column, group_keys=False).apply(_add_lags)
 
-    def predict(self, data: pd.DataFrame, pointwise_aggregation_method: str = "mean"):
+    def predict(self, data: pd.DataFrame):
         """
         Predicts the target variable on data.
         """
@@ -133,12 +136,12 @@ class RandomEffectsModel(BaseModel):
             self.results, data=data, inplace=False, sample_new_groups=True
         )
 
-        if pointwise_aggregation_method == "mean":
+        if self.pointwise_aggregation_method == "mean":
             predictions = az.extract(predictions)[f"{self.target_column}_mean"].mean(
                 "sample"
             )
             
-        elif pointwise_aggregation_method == "distribution":
+        elif self.pointwise_aggregation_method == "distribution":
             def getDistribution(row):
                 kde = gaussian_kde(row)
                 return kde
@@ -151,7 +154,7 @@ class RandomEffectsModel(BaseModel):
 
         else:
             raise ValueError(
-                f"Unknown pointwise aggregation method: {pointwise_aggregation_method}"
+                f"Unknown pointwise aggregation method: {self.pointwise_aggregation_method}"
             )
         
         data["predictions"] = predictions
@@ -173,16 +176,18 @@ class RandomEffectsModel(BaseModel):
         )
         
         # deNormalize
-        if pointwise_aggregation_method == "mean":
+        if self.pointwise_aggregation_method == "mean":
 
             predictions.inflation = predictions.inflation * self.target_std + self.target_mean
             
-        if pointwise_aggregation_method == "distribution":
+        if self.pointwise_aggregation_method == "distribution":
 
             def denormalize_density(kde):
                 x_axis = np.linspace(min(kde.dataset[0]),max(kde.dataset[0]), 1000)
                 pdf_values = kde.pdf(x_axis)
                 denormalized_x_axis = x_axis * self.target_std + self.target_mean
+                area = simps(pdf_values)
+                pdf_values = pdf_values/area
                 return {"pdf": pdf_values, "inflation_grid": denormalized_x_axis}
 
             predictions.inflation = predictions.inflation.apply(denormalize_density)
