@@ -6,6 +6,9 @@ import arviz as az
 import pymc as pm
 from seminartools.matern_kernel import MaternGeospatial
 from tqdm import tqdm
+from scipy.stats import gaussian_kde
+from scipy.integrate import simps
+
 
 
 class DistanceModel(BaseModel):
@@ -21,6 +24,7 @@ class DistanceModel(BaseModel):
         chains: int = 4,
         distance_function: callable = geo_distance,
         distance_scaling: float = 1000,
+        pointwise_aggregation_method: str = "mean",
     ):
         """
         Initializes the model.
@@ -31,6 +35,7 @@ class DistanceModel(BaseModel):
         self.target_column = target_column
         self.exogenous_columns = exogenous_columns
         self.distance_function = distance_function
+        self.pointwise_aggregation_method = pointwise_aggregation_method
 
         # Regress on lagged exogenous variables and lagged target variable
         self.lagged_exog_columns = [
@@ -219,7 +224,7 @@ class DistanceModel(BaseModel):
 
         return data.groupby(self.country_column, group_keys=False).apply(_add_lags)
 
-    def predict(self, data: pd.DataFrame, aggregation_method: str = "mean", debug: bool = False):
+    def predict(self, data: pd.DataFrame, debug: bool = False):
         """
         Predicts the target variable on data, vectorized for improved performance.
         """
@@ -255,12 +260,19 @@ class DistanceModel(BaseModel):
         # predictions shape: [samples, rows]
 
         # Aggregate predictions across samples
-        if aggregation_method == "mean":
-            aggregated_predictions = predictions.mean(axis=0)
-        elif aggregation_method == "median":
+        if self.pointwise_aggregation_method == "mean":
+            pointwise_aggregated_predictions = predictions.mean(axis=0)
+        elif self.pointwise_aggregation_method == "median":
             aggregated_predictions = np.median(predictions, axis=0)
+        elif self.pointwise_aggregation_method == "distribution":
+            def getKDE(row):
+                kde = gaussian_kde(row)
+                return kde
+
+            aggregated_predictions = np.apply_along_axis(getKDE, arr=predictions, axis=0)
+
         else:
-            raise ValueError(f"Unsupported aggregation method: {aggregation_method}")
+            raise ValueError(f"Unsupported aggregation method: {self.pointwise_aggregation_method}")
 
         predictions_df = pd.DataFrame(
             {
@@ -286,6 +298,17 @@ class DistanceModel(BaseModel):
         predictions_df = predictions_df
 
         # Denormalize
-        predictions_df["inflation"] = predictions_df["inflation"] * self.target_std + self.target_mean
+        if self.pointwise_aggregation_method == "mean" or self.pointwise_aggregation_method == "median":
+            predictions_df["inflation"] = predictions_df["inflation"] * self.target_std + self.target_mean
 
+        elif self.pointwise_aggregation_method == "distribution":
+            def denormalize_density(kde):
+                x_axis = np.linspace(min(kde.dataset[0]),max(kde.dataset[0]), 10000)
+                pdf_values = kde.pdf(x_axis)
+                denormalized_x_axis = x_axis * self.target_std + self.target_mean
+                area = simps(pdf_values)
+                pdf_values = (pdf_values/area)
+                return {"pdf": pdf_values, "inflation_grid": denormalized_x_axis}
+            
+            predictions_df.inflation = predictions_df.inflation.apply(denormalize_density)
         return predictions_df

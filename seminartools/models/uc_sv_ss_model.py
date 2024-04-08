@@ -42,10 +42,12 @@ class UCSVSSModel(BaseModel):
         stochastic_seasonality: bool,
         country_column: str = "country",
         date_column: str = "date",
+        pointwise_aggregation_method: str = "median",
     ):
         self.num_particles = num_particles
         self.country_column = country_column
         self.date_column = date_column
+        self.pointwise_aggregation_method = pointwise_aggregation_method
 
         self.gamma = GAMMA
 
@@ -76,11 +78,10 @@ class UCSVSSModel(BaseModel):
         if not hasattr(self, "stored_state_means"):
             raise ValueError("Model has not been `run_pf`'d yet.")
 
-    def full_fit(self, data: pd.DataFrame, aggregation_method : str = "median"):
+    def full_fit(self, data: pd.DataFrame):
         """
         Run the particle filter on the data of a single country.
         """
-        self.aggregation_method = aggregation_method
         # dfs = data.groupby("Country").apply(self._run_pf)
         dfs = Parallel(n_jobs=N_CORES)(
             delayed(self._run_pf)(data.loc[data[self.country_column] == country])
@@ -211,7 +212,7 @@ class UCSVSSModel(BaseModel):
             )
             X[t, :, :] = X[t, indices, :]
 
-        if self.aggregation_method == "median":
+        if self.pointwise_aggregation_method == "median":
             out = pd.DataFrame(
                 {
                     "date": data["date"].values,
@@ -229,7 +230,7 @@ class UCSVSSModel(BaseModel):
                     "inflation": data["inflation"].values,
                 }
             )
-        elif self.aggregation_method == "distribution":
+        elif self.pointwise_aggregation_method == "distribution":
             def getPDFRow(row):
                 pdf = gaussian_kde(row) 
                 return pdf
@@ -302,7 +303,7 @@ class UCSVSSModel(BaseModel):
 
         tplus1 = len(data) + 1
 
-        if self.aggregation_method == "distribution":
+        if self.pointwise_aggregation_method == "distribution":
 
             minVal = min(min(tau_tminus1.dataset[0]),min(delta_tminus1["edelta1"].dataset[0]),min(delta_tminus1["edelta2"].dataset[0]), min(delta_tminus1["edelta3"].dataset[0]), min(delta_tminus1["edelta4"].dataset[0]))
             maxVal = max(max(tau_tminus1.dataset[0]),max(delta_tminus1["edelta1"].dataset[0]),max(delta_tminus1["edelta2"].dataset[0]), max(delta_tminus1["edelta3"].dataset[0]), max(delta_tminus1["edelta4"].dataset[0]))
@@ -331,7 +332,7 @@ class UCSVSSModel(BaseModel):
             }
 
 
-        elif self.aggregation_method == "median":
+        elif self.pointwise_aggregation_method == "median":
             return {
                 "inflation": (
                     tau_tminus1
