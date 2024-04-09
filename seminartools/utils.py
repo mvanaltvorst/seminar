@@ -65,7 +65,7 @@ def geo_distance(
         
         # if two countries are in different continents, return a large distance
         if country_to_continent(countryA.name) != country_to_continent(countryB.name):
-            return float("inf")
+            return 10**8
 
         # Use the ISO alpha-3 country codes to find the distance.
         row = DF_DISTANCE[
