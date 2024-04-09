@@ -155,6 +155,7 @@ def _get_stats(
             "mz_slope": mz_slope,
             "mz_r2": mz_r2,
             "mz_wald_test_statistic": wald_test.statistic[0][0],
+            "p-value": wald_test.pvalue,
         }
     )
 
