@@ -9,3 +9,4 @@ xlrd
 tqdm
 joblib
 scikit-learn
+openpyxl

@@ -223,6 +223,7 @@ def get_mse_by_country(
     h: int = 1,
     num_cores_parallel_models: int = 1,
     num_cores_parallel_splits: int = 1,
+    percentage_point: str  = False,
 ):
     """
     Compares the performance of multiple models on a given dataset by computing MSE for each country.
@@ -244,5 +245,8 @@ def get_mse_by_country(
         frame = work_model(name, model_generator)
         df = pd.concat([df,frame], axis = 1)
     df.columns = [name for name, model_generator in model_generators]
-    return df.multiply(100^2)
+    if percentage_point:
+        return df.multiply(100^2)
+    else:
+        return df
         
