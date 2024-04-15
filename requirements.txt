@@ -10,3 +10,6 @@ tqdm
 joblib
 scikit-learn
 openpyxl
+geopy
+pycountry_convert
+geopandas
