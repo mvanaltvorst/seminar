@@ -58,9 +58,10 @@ class UCSVSSModel(BaseModel):
 
         self.vague_prior_lnsetasq_sigma = VAGUE_PRIOR_LNSETASQ_SIGMA
         self.vague_prior_lnsepsilonsq_sigma = VAGUE_PRIOR_LNSEPSILONSQ_SIGMA
+        self.stochastic_seasonality = stochastic_seasonality
 
         # No stochastic seasonality is equivalent to theta = 0 and no prior variance in delta
-        if stochastic_seasonality:
+        if self.stochastic_seasonality:
             self.theta = THETA
             self.vague_prior_delta_sigma = VAGUE_PRIOR_DELTA_SIGMA
         else:
@@ -234,7 +235,18 @@ class UCSVSSModel(BaseModel):
             def getPDFRow(row):
                 pdf = gaussian_kde(row) 
                 return pdf
-            
+
+            if self.stochastic_seasonality:
+                edelta1 = np.apply_along_axis(getPDFRow, axis = 1, arr = (X[1:, :, 3] / 100))
+                edelta2 = np.apply_along_axis(getPDFRow, axis = 1, arr = (X[1:, :, 4] / 100))
+                edelta3 = np.apply_along_axis(getPDFRow, axis = 1, arr= (X[1:, :, 5] / 100))
+                edelta4 = np.apply_along_axis(getPDFRow, axis = 1, arr= (X[1:, :, 6] / 100))
+            else:
+                edelta1 = [0 for i in range(0,len(X[1:,:,3]))]
+                edelta2 = [0 for i in range(0,len(X[1:,:,4]))]
+                edelta3 = [0 for i in range(0,len(X[1:,:,5]))]
+                edelta4 = [0 for i in range(0,len(X[1:,:,6]))]
+
             out = pd.DataFrame(
                {
                     "date": data["date"].values,
@@ -244,10 +256,10 @@ class UCSVSSModel(BaseModel):
                     "esigmaeta": np.apply_along_axis(getPDFRow,axis=1,arr=(np.sqrt(np.exp(X[1:, :, 1])))),
                     "elnsepsilonsq": np.apply_along_axis(getPDFRow, axis = 1,arr=(X[1:, :, 2])),
                     "esigmaepsilon": np.apply_along_axis(getPDFRow, axis = 1, arr=(np.sqrt(np.exp(X[1:, :, 2])))),
-                    "edelta1": np.apply_along_axis(getPDFRow, axis = 1, arr = (X[1:, :, 3] / 100)),
-                    "edelta2": np.apply_along_axis(getPDFRow, axis = 1, arr = (X[1:, :, 4] / 100)),
-                    "edelta3": np.apply_along_axis(getPDFRow, axis = 1, arr= (X[1:, :, 5] / 100)),
-                    "edelta4": np.apply_along_axis(getPDFRow, axis = 1, arr= (X[1:, :, 6] / 100)),
+                    "edelta1": edelta1,
+                    "edelta2": edelta2,
+                    "edelta3": edelta3,
+                    "edelta4": edelta4,
                     "meff": 1 / np.sum(W[1:, :] ** 2, axis=1),
                     "inflation": data["inflation"].values,
                 }  
@@ -304,27 +316,34 @@ class UCSVSSModel(BaseModel):
         tplus1 = len(data) + 1
 
         if self.pointwise_aggregation_method == "distribution":
+            if self.stochastic_seasonality:
+                minVal = min(min(tau_tminus1.dataset[0]),min(delta_tminus1["edelta1"].dataset[0]),min(delta_tminus1["edelta2"].dataset[0]), min(delta_tminus1["edelta3"].dataset[0]), min(delta_tminus1["edelta4"].dataset[0]))
+                maxVal = max(max(tau_tminus1.dataset[0]),max(delta_tminus1["edelta1"].dataset[0]),max(delta_tminus1["edelta2"].dataset[0]), max(delta_tminus1["edelta3"].dataset[0]), max(delta_tminus1["edelta4"].dataset[0]))
+                vals = np.linspace(minVal, maxVal, 1000)
 
-            minVal = min(min(tau_tminus1.dataset[0]),min(delta_tminus1["edelta1"].dataset[0]),min(delta_tminus1["edelta2"].dataset[0]), min(delta_tminus1["edelta3"].dataset[0]), min(delta_tminus1["edelta4"].dataset[0]))
-            maxVal = max(max(tau_tminus1.dataset[0]),max(delta_tminus1["edelta1"].dataset[0]),max(delta_tminus1["edelta2"].dataset[0]), max(delta_tminus1["edelta3"].dataset[0]), max(delta_tminus1["edelta4"].dataset[0]))
-            vals = np.linspace(minVal, maxVal, 1000)
+                pdf_tau_tminus1 = tau_tminus1(vals)
+                if seas(0,tplus1) == 1:
+                    pdf_edelta = delta_tminus1["edelta1"](vals)
+                elif seas(1,tplus1) == 1:
+                    pdf_edelta = delta_tminus1["edelta2"](vals)
+                elif (seas(2,tplus1)) == 1:
+                    pdf_edelta = delta_tminus1["edelta3"](vals)
+                elif (seas(3,tplus1)) == 1:
+                    pdf_edelta = delta_tminus1["edelta4"](vals)
 
-            pdf_tau_tminus1 = tau_tminus1(vals)
-            if seas(0,tplus1) == 1:
-                pdf_edelta = delta_tminus1["edelta1"](vals)
-            elif seas(1,tplus1) == 1:
-                pdf_edelta = delta_tminus1["edelta2"](vals)
-            elif (seas(2,tplus1)) == 1:
-                pdf_edelta = delta_tminus1["edelta3"](vals)
-            elif (seas(3,tplus1)) == 1:
-                pdf_edelta = delta_tminus1["edelta4"](vals)
+                #inflation = np.convolve(pdf_tau_tminus1,pdf_edelta, mode='same')
+                inflation = fftconvolve(pdf_tau_tminus1,pdf_edelta)
+                vals_convolved = np.linspace(vals[0], vals[-1], len(inflation))
 
-            #inflation = np.convolve(pdf_tau_tminus1,pdf_edelta, mode='same')
-            inflation = fftconvolve(pdf_tau_tminus1,pdf_edelta)
-            vals_convolved = np.linspace(vals[0], vals[-1], len(inflation))
-
-            area = simps(inflation)
-            normalized_inflation = inflation / area
+                area = simps(inflation)
+                normalized_inflation = inflation / area
+            else:
+                minVal = min(tau_tminus1.dataset[0])
+                maxVal = max(tau_tminus1.dataset[0])
+                vals_convolved = np.linspace(minVal,maxVal, 1999)
+                inflation = tau_tminus1(vals_convolved)
+                area = simps(inflation)
+                normalized_inflation = inflation / area            
             return {
                 "inflation": {"pdf":normalized_inflation, "inflation_grid": vals_convolved},
                 "country": data["country"].iloc[0],

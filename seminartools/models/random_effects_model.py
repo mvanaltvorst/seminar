@@ -183,7 +183,7 @@ class RandomEffectsModel(BaseModel):
         if self.pointwise_aggregation_method == "distribution":
 
             def denormalize_density(kde):
-                x_axis = np.linspace(min(kde.dataset[0]),max(kde.dataset[0]), 1000)
+                x_axis = np.linspace(min(kde.dataset[0]),max(kde.dataset[0]), 1999)
                 pdf_values = kde.pdf(x_axis)
                 denormalized_x_axis = x_axis * self.target_std + self.target_mean
                 area = simps(pdf_values)

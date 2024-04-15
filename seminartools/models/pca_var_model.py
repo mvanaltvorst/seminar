@@ -83,6 +83,10 @@ class PCAVARModel(BaseModel):
 
         self.all_eigenvalues, self.all_eigenvectors = np.linalg.eig(cov_matrix)
 
+        idx = self.all_eigenvalues.argsort()[::-1]   
+        self.all_eigenvalues = self.all_eigenvalues[idx]
+        self.all_eigenvectors = self.all_eigenvectors[:,idx]
+
         # We only consider the first num_pcs principal components
         # and the corresponding eigenvalues
         self.eigenvalues = self.all_eigenvalues[: self.num_pcs]
