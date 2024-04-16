@@ -5,6 +5,7 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import statsmodels.api as sm
+import numpy as np
 
 
 def h_period_ahead_forecast(
@@ -181,6 +182,7 @@ def get_stats(
             progress=False,
             num_cores=num_cores_parallel_splits,
         )
+        predictions["inflation"] = np.real(predictions["inflation"])
         return _get_stats(data, predictions)
 
     return pd.DataFrame(
