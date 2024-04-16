@@ -331,7 +331,6 @@ class UCSVSSModel(BaseModel):
                 elif (seas(3,tplus1)) == 1:
                     pdf_edelta = delta_tminus1["edelta4"](vals)
 
-                #inflation = np.convolve(pdf_tau_tminus1,pdf_edelta, mode='same')
                 inflation = fftconvolve(pdf_tau_tminus1,pdf_edelta)
                 vals_convolved = np.linspace(vals[0], vals[-1], len(inflation))
 
