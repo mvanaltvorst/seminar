@@ -25,11 +25,42 @@ def h_period_ahead_forecast(
     Args:
 
     """
+
+    # multistep ahead forecasting for (M-)UC-SV(-SS)
+    # idea is to compute  1 step ahead forecast and set that equal to h step ahead forecast => get rid of for loop
+    # and update time at the end...
     if model.REQUIRES_ANTE_FULL_FIT and h > 1:
-        raise ValueError("""
-You are trying to make a forecast for more than one period ahead, but the model requires a full fit.
-Please set h to 1 or use a different model.
-        """)
+
+        # We need to start earlier than the start date because we forecast h periods ahead. 
+        # start_date is the first date we want to forecast
+        current_time = pd.to_datetime(start_date) - pd.DateOffset(months=3 * (h - 1))
+
+        predictions = []
+
+        while True:
+            forecast_time = current_time
+            auxiliary_df = data[data["date"] < forecast_time].copy()
+
+            # for i in range(h): commmented out, i.e., fix h to be one here
+            preds = model.predict(auxiliary_df)
+            # Add the predictions to the auxiliary dataframe
+            auxiliary_df = pd.concat([auxiliary_df, preds], ignore_index=True)
+
+            forecast_time += pd.DateOffset(months=3)
+
+            predictions.append(preds)
+
+            # We stop making forecasts if we have reached the end of the data
+            if current_time + pd.DateOffset(months=3 * h) > data.iloc[-1]["date"]:
+                break
+
+            current_time += pd.DateOffset(months=3)
+
+        frame = pd.concat(predictions, ignore_index=True)   
+        frame['date'] = frame['date'] +  pd.DateOffset(months=3*(h-1)) #update to correct time
+        return frame
+
+
 
     # We need to start earlier than the start date because we forecast h periods ahead
     current_time = pd.to_datetime(start_date) - pd.DateOffset(months=3 * (h - 1))
@@ -40,10 +71,9 @@ Please set h to 1 or use a different model.
         auxiliary_df = data[data["date"] < forecast_time].copy()
         for i in range(h):
             preds = model.predict(auxiliary_df)
-
+        
             # Add the predictions to the auxiliary dataframe
             auxiliary_df = pd.concat([auxiliary_df, preds], ignore_index=True)
-
             forecast_time += pd.DateOffset(months=3)
 
         predictions.append(preds)
@@ -51,7 +81,6 @@ Please set h to 1 or use a different model.
         # We stop making forecasts if we have reached the end of the data
         if current_time + pd.DateOffset(months=3 * h) > data.iloc[-1]["date"]:
             break
-
         current_time += pd.DateOffset(months=3)
 
     return pd.concat(predictions, ignore_index=True)
