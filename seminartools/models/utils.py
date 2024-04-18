@@ -74,6 +74,10 @@ def h_period_ahead_forecast(
         
             # Add the predictions to the auxiliary dataframe
             auxiliary_df = pd.concat([auxiliary_df, preds], ignore_index=True)
+            # we forward fill all the exogenous variables, keep the country column
+            auxiliary_df = auxiliary_df.groupby("country", group_keys=False).apply(
+                lambda group: group.ffill()
+            )
             forecast_time += pd.DateOffset(months=3)
 
         predictions.append(preds)
