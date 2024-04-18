@@ -163,7 +163,10 @@ class PCAVARModel(BaseModel):
             columns=self.country_column,
             values=self.inflation_column,
         )
-        data_wide = data_wide[self.data_wide_columns]
+        # If columns are missing they're filled with zeroes.
+        data_wide = data_wide.reindex(
+            self.data_wide_columns, axis = 1
+        )
 
         # Step 0.5: standardize the data
         if self.standardize_pre_post:
