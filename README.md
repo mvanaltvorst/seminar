@@ -1,81 +1,73 @@
 # Seminar
-## Installation
+By Maurits van Altvorst, Philipp Hoecker, Matthias Hofstede and Stefan van Diepen.
+
+This project is structured into different parts:
+
+1. Python package: the `seminartools` package provides us with models and utilities created during this seminar.
+2. Notebooks: this is the glue that merges all models and utilities together. 
+
+## Installation of `seminartools`
 
 ```bash
 cd seminartools/
 pip install -e .
 ```
 
-## Potential models
-### ARMAX model
-Should fit an ARMAX model on each individual country, and use AIC to select the best model per country (could differ per country).
+Changes to the package will be directly reflected in your current venv.
 
-### PCA dimension reduced VARX model
-Project the inflation onto a lower-dimensional space using PCA, and then fit a VARX model on the projected data.
+# Structure of `seminartools` package
+### `seminartools.models`
+Contains several models:
+- ARMAX
+- covariance BHM
+- distance BHM
+- 4 quarter average model (AO)
+- MUCSVSS model
+    - This model is expensive to fit (`full_fit(.)` takes approx. 1-2 hours and up to 80GB of RAM). We built in functionality to save this model to disk using pickle files and load it back later. These fitted models are found in `models/` and are generated using the `notebooks/models/mucsvssmodel_long_run.py` CLI script (use with `-h` argument to see all command line arguments). 
+- UCSVSS model
+    - pass argument `stochastic_seasonality=False` to obtain UCSV model
+- PCAVAR model
+- VAR model
+    - not directly used on panel inflation data, but is used implicitly by the PCAVAR model
 
-Maybe other dimension reduction techniques could be used? 
+Each of these models inherits from the `BaseModel` class and implements the following methods:
+- `fit(df_inflation)`: fits the model given all data available in `df_inflation`. 
+- `predict(df_inflation)`: given `df_inflation`, predict cross-sectional inflation at time `max(t) + 1` where `max(t)` is the maximum timestamp occurring in `df_inflation`. 
 
-### Random effects model
+If `Model.FULL_FIT == True`, the model is path-dependent and cannot be used to make far out-of-sample predictions (e.g. the models that depend on particle filters). We fit these using the `full_fit(.)` method on the entire dataset (train + test) and depend on internal logic within the model to ensure there are no lookahead errors. 
 
-```
-y[i, t] = alpha[i] + beta[i] * x[i, t] + gamma[i] * w[t] + epsilon[i, t]
-alpha[i] = alpha_0 + eta_alpha[i]
-beta[i] = beta_0 + eta_beta[i]
-gamma[i] = gamma_0 + eta_gamma[i]
-alpha_0 ~ N(0, tau_alpha)
-beta_0 ~ N(0, tau_beta)
-gamma_0 ~ N(0, tau_gamma)
-eta_alpha[i] ~ N(0, tau_eta_alpha)
-eta_beta[i] ~ N(0, tau_eta_beta)
-eta_gamma[i] ~ N(0, tau_eta_gamma)
-tau_alpha ~ Gamma(1, 1)
-tau_beta ~ Gamma(1, 1)
-tau_gamma ~ Gamma(1, 1)
-tau_eta_alpha ~ Gamma(1, 1)
-tau_eta_beta ~ Gamma(1, 1)
-tau_eta_gamma ~ Gamma(1, 1)
+### `seminartools.models.utils`
+In `models/utils.py`, we have methods to calculate e.g. h-period ahead forecasts given a model, perform expanding window retraining, and calculate MSE/MAE/Mincer Zarnowitz statistics. 
 
-epsilon[i, t] ~ N(0, tau_epsilon)
-tau_epsilon ~ Gamma(1, 1)
-```
+### `seminartools.data`
+Methods to read data from the many data sources we employ in a standardized format. Also exports `read_merged` which provides the intersection of all available data across data sources.
 
-Where `y` is inflation, `x` are country-specific time-varying regressors, and `w` is a global time-varying regressor.
+### `seminartools.matern_kernel`
+A Matern kernel that's used by the distance model. It takes in a distance function and returns a covariance matrix.
 
-### Distance-based model
-```
-y[i,t] = alpha[i] + beta[i] * x[i, t] + gamma[i] * w[t] + epsilon[i, t]
-... (fewer constraints on beta than above)
-beta[i] - beta[j] ~ N(0, dist(i, j) * sigma_beta) 
-# incorporate prior that betas are similar for closeby countries
-# only for countries i and j that are main trade partners
-```
-distance based on 1. trades 2. geographical similarity within continent
+### `seminartools.model_evaluation` and `seminartools.modelEvaluationTests`
+Miscellaneous experimental helper functions that were not used in the end.
 
-## Techniques to incorporate
-### Check convergence of MCMC
-- autocorrelation 
-- trace plot
-- Gelman-Rubin statistic
-- effective sample size
+### `seminartools.time_series_split`
+Contains an expanding window time series splitting method that is used to retrain every 4 years.
 
-Important:
-- use sufficient burn-in
+### `seminartools.utils`
+Geospatial distance, country -> continent function, and other geospatial helper functions.
 
-### Obtain acceptance rate of around 40% for MCMC
+# Structure of notebooks
+### `notebooks/data`
+Helper notebooks used to experiment with the data and how to merge these together.
 
-### Brier score to evaluate forecast accuracy
+### `notebooks/methods`
+Helper notebooks used to experiment with the particle filters and BHMs. These were only experiments regarding the methodology itself; the true fully fledged models with corresponding experiemts can be found within `seminartools.models` and `notebooks/models`.
 
-### DIC comparison of models
-### Or BPIC to avoid overfitting
+### `notebooks/models`
+Contains a notebook corresponding to each model to experiment with the efficacy of said model. 
 
-## Plots to make
-- `alpha[i]` on world map
-- joint distribution of `alpha[i]` and `beta[i]`
-- actual inflation forecasts and 95% confidence intervals (and what fraction falls within)
+### `notebooks/model_eval`
+The important results lie here. `model_eval.ipynb` contains the code that results in the main 1 quarter ahead inflation prediction results. 
 
 
-## Useful links
+## Useful references
 - https://florianwilhelm.info/2020/10/bayesian_hierarchical_modelling_at_scale/
 - https://www.pymc.io/welcome.html
-PyMC might be slow, in that case we can try PyJAGS
-- https://github.com/michaelnowotny/pyjags

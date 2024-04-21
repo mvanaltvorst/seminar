@@ -35,8 +35,8 @@ def geo_distance(
     Parameters:
     - countryA (str): The name of the first country.
     - countryB (str): The name of the second country.
-    - use_geopy: wheter to use the geopy package. This calculates Vincenty distance
-        usefull for geopandas plotting
+    - use_geopy: wheter to use the geopy package. This calculates Vincenty distance,
+        useful for geopandas plotting
 
     Returns:
     - float: The geographical distance between the two countries in kilometers.
