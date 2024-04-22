@@ -61,7 +61,9 @@ class PCAVARModel(BaseModel):
         # Step 0.5: standardize the data
         if self.standardize_pre_post:
             self.means = data_wide.mean()
-            self.stds = data_wide.std()
+            self.stds = (
+                data_wide.std() + 1e-6
+            )  # Add a small number to avoid division by zero
             data_wide = (data_wide - self.means) / self.stds
 
         # Step 1: factor decomposition
@@ -83,9 +85,9 @@ class PCAVARModel(BaseModel):
 
         self.all_eigenvalues, self.all_eigenvectors = np.linalg.eig(cov_matrix)
 
-        idx = self.all_eigenvalues.argsort()[::-1]   
+        idx = self.all_eigenvalues.argsort()[::-1]
         self.all_eigenvalues = self.all_eigenvalues[idx]
-        self.all_eigenvectors = self.all_eigenvectors[:,idx]
+        self.all_eigenvectors = self.all_eigenvectors[:, idx]
 
         # We only consider the first num_pcs principal components
         # and the corresponding eigenvalues
@@ -164,9 +166,7 @@ class PCAVARModel(BaseModel):
             values=self.inflation_column,
         )
         # If columns are missing they're filled with zeroes.
-        data_wide = data_wide.reindex(
-            self.data_wide_columns, axis = 1
-        )
+        data_wide = data_wide.reindex(self.data_wide_columns, axis=1)
 
         # Step 0.5: standardize the data
         if self.standardize_pre_post:
