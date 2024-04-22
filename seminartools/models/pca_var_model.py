@@ -78,8 +78,8 @@ class PCAVARModel(BaseModel):
         cov_matrix = cov_matrix.fillna(median_cov)
 
         # make psd by adding negative smallest eigenvalue if it exists
-        epsilon = -max(np.abs(np.min(np.linalg.eigvals(cov_matrix))) - 1e-6, -1e-6)
-        np.fill_diagonal(cov_matrix.values, old_diagonal + epsilon)
+        epsilon = 1e-6
+        cov_matrix = cov_matrix * (1 - epsilon) + np.eye(cov_matrix.shape[0]) * epsilon
 
         self.all_eigenvalues, self.all_eigenvectors = np.linalg.eig(cov_matrix)
 
