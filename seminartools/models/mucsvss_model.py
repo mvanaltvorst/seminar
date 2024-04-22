@@ -14,7 +14,7 @@ import os
 # nu follows a normal distribution with variance gamma
 GAMMA = 0.2
 
-# zeta follows a normal distribution with variance theta
+# xi follows a normal distribution with variance theta
 THETA = 0.002
 
 INIT_LNSETASQ = -4
