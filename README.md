@@ -1,4 +1,6 @@
 # Seminar
+[Final report](final_report.pdf)
+
 By Maurits van Altvorst, Philipp Hoecker, Matthias Hofstede and Stefan van Diepen.
 
 This project is structured into different parts:
